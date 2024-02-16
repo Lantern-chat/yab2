@@ -334,7 +334,7 @@ impl Client {
     }
 
     /// Prepares parts of a large file for uploading using the `b2_start_large_file` API.
-    pub async fn start_large_file(&self, info: &NewFileInfo) -> Result<LargeFile, B2Error> {
+    pub async fn start_large_file(&self, info: &NewFileInfo) -> Result<LargeFileUpload, B2Error> {
         let info = self
             .run_request_with_reauth(|b2| async move {
                 let state = b2.state.read().await;
@@ -357,7 +357,7 @@ impl Client {
             })
             .await?;
 
-        Ok(LargeFile {
+        Ok(LargeFileUpload {
             client: self.clone(),
             info,
         })
@@ -385,7 +385,7 @@ pub struct ServerSideEncryptionForDownload {
     pub key_md5: String,
 }
 
-/// Information about a new file to be uploaded.
+/// Info about a new whole file to be uploaded.
 ///
 /// See the documentation for [`NewFileInfo::builder`] for more information.
 #[derive(Debug, typed_builder::TypedBuilder)]
@@ -401,13 +401,30 @@ pub struct NewFileInfo {
     #[builder(default, setter(into))]
     content_type: Option<String>,
 
-    /// The SHA1 of the file's contents as a hex string.
+    /// The SHA1 hash of the file's contents as a hex string.
     #[builder(setter(into))]
     content_sha1: String,
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
     encryption: Option<models::B2ServerSideEncryption>,
+}
+
+/// Info about a new part of a large file to be uploaded.
+///
+/// See the documentation for [`NewPartInfo::builder`] for more information.
+#[derive(Debug, typed_builder::TypedBuilder)]
+pub struct NewPartInfo {
+    /// The part number of the new large file part.
+    #[builder(setter(into))]
+    part_number: NonZeroU32,
+
+    /// The length of the part in bytes.
+    content_length: u64,
+
+    /// The SHA1 hash of the part's contents as a hex string.
+    #[builder(setter(into))]
+    content_sha1: String,
 }
 
 macro_rules! h {
@@ -439,6 +456,14 @@ impl NewFileInfo {
                 }
             }
         }
+    }
+}
+
+impl NewPartInfo {
+    fn add_headers(&self, headers: &mut HeaderMap) {
+        h!(headers."x-bz-part-number" => &self.part_number.to_string());
+        h!(headers."content-length" => &self.content_length.to_string());
+        h!(headers."x-bz-content-sha1" => &self.content_sha1);
     }
 }
 
@@ -541,14 +566,14 @@ impl UploadUrl {
 ///
 /// Any [`UploadPartUrl`] can be used to upload a part of the file. Once all parts have been uploaded,
 /// call [`LargeFile::finish`] to complete the upload.
-pub struct LargeFile {
+pub struct LargeFileUpload {
     client: Client,
     info: models::B2FileInfo,
 }
 
-impl LargeFile {
+impl LargeFileUpload {
     /// Equivalent to [`Client::start_large_file`].
-    pub async fn start(client: &Client, info: &NewFileInfo) -> Result<LargeFile, B2Error> {
+    pub async fn start(client: &Client, info: &NewFileInfo) -> Result<LargeFileUpload, B2Error> {
         client.start_large_file(info).await
     }
 
@@ -563,7 +588,7 @@ impl LargeFile {
     pub async fn upload_part<F, B>(
         &self,
         url: &mut UploadPartUrl,
-        part_number: NonZeroU32,
+        info: &NewPartInfo,
         body: F,
     ) -> Result<models::B2PartInfo, B2Error>
     where
@@ -578,7 +603,7 @@ impl LargeFile {
                     .header(AUTH_HEADER, &url.auth)
                     .headers({
                         let mut headers = HeaderMap::new();
-                        h!(headers."x-bz-part-number" => &part_number.to_string());
+                        info.add_headers(&mut headers);
                         headers
                     })
                     .body(body())
@@ -589,11 +614,11 @@ impl LargeFile {
     pub async fn upload_part_bytes(
         &self,
         url: &mut UploadPartUrl,
-        part_number: NonZeroU32,
+        info: &NewPartInfo,
         bytes: impl Into<bytes::Bytes>,
     ) -> Result<models::B2PartInfo, B2Error> {
         let bytes = bytes.into();
-        self.upload_part(url, part_number, || bytes.clone()).await
+        self.upload_part(url, info, || bytes.clone()).await
     }
 
     /// Converts the parts that have been uploaded into a single B2 file.
@@ -672,7 +697,7 @@ impl LargeFile {
     }
 }
 
-impl std::ops::Deref for LargeFile {
+impl std::ops::Deref for LargeFileUpload {
     type Target = Client;
     fn deref(&self) -> &Self::Target {
         &self.client

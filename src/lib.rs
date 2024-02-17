@@ -229,25 +229,34 @@ impl Client {
         })
         .await
     }
+}
 
-    /// Uses the `b2_download_file_by_id` API to download a file by its ID, returning a [`DownloadedFile`],
+/// Identifier for a file to download, either by its file ID or file name.
+///
+/// Used in [`Client::download_file`].
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum DownloadFileBy<'a> {
+    /// Download a file by its file ID.
+    FileId(&'a str),
+
+    /// Download a file by its file name.
+    FileName(&'a str),
+}
+
+impl Client {
+    /// Downloads a file by its ID or name, returning a [`DownloadedFile`],
     /// which is a wrapper around a [`reqwest::Response`] and the file's parsed headers.
     ///
+    /// The `file` parameter can be either a file ID or a file name.
     /// The `range` parameter can be used to download only a portion of the file. If `None`, the entire file will be downloaded.
-    ///
     /// The `encryption` parameter is only required if the file is encrypted with server-side encryption with a customer-provided key (SSE-C).
-    pub async fn download_file_by_id(
+    pub async fn download_file(
         &self,
-        file_id: &str,
+        file: DownloadFileBy<'_>,
         range: Option<headers::Range>,
         encryption: Option<sse::ServerSideEncryptionCustomer>,
     ) -> Result<DownloadedFile, B2Error> {
-        #[derive(Serialize)]
-        #[serde(rename_all = "camelCase")]
-        struct B2DownloadFileById<'a> {
-            file_id: &'a str,
-        }
-
         let (range, encryption) = (&range, &encryption);
 
         self.run_request_with_reauth(|b2| async move {
@@ -255,27 +264,36 @@ impl Client {
 
             state.check_capability("readFiles")?;
 
-            let mut builder = b2
+            // serde_urlencoded doesn't support top-level enums,
+            // so we need to use a wrapper struct
+            #[derive(Serialize)]
+            struct DownloadFileBy2<'a> {
+                #[serde(flatten)]
+                file: DownloadFileBy<'a>,
+            }
+
+            let resp = b2
                 .client
-                .request(Method::GET, "b2_download_file_by_id")
-                .query(&B2DownloadFileById { file_id })
-                .header(AUTH_HEADER, &state.auth);
-
-            if let Some(ref range) = range {
-                let mut headers = reqwest::header::HeaderMap::new();
-                headers.typed_insert(range.clone());
-                builder = builder.headers(headers);
-            }
-
-            if let Some(ref encryption) = encryption {
-                builder = builder.headers({
+                .request(Method::GET, {
+                    state.url(match file {
+                        DownloadFileBy::FileId(_) => "b2_download_file_by_id",
+                        DownloadFileBy::FileName(_) => "b2_download_file_by_name",
+                    })
+                })
+                .header(AUTH_HEADER, &state.auth)
+                .headers({
                     let mut headers = HeaderMap::new();
-                    encryption.add_headers(&mut headers);
+                    if let Some(ref range) = range {
+                        headers.typed_insert(range.clone());
+                    }
+                    if let Some(ref encryption) = encryption {
+                        encryption.add_headers(&mut headers);
+                    }
                     headers
-                });
-            }
-
-            let resp = builder.send().await?;
+                })
+                .query(&DownloadFileBy2 { file })
+                .send()
+                .await?;
 
             Ok(DownloadedFile {
                 info: models::B2FileHeaders::parse(resp.headers())?,
@@ -768,6 +786,18 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     use super::*;
+
+    #[test]
+    fn test_downloadby_serialization() {
+        let file_id = "4_zc1234567890abcdef1234f1";
+        let file_name = "example.txt";
+
+        let file_id_json = serde_json::to_string(&DownloadFileBy::FileId(file_id)).unwrap();
+        let file_name_json = serde_json::to_string(&DownloadFileBy::FileName(file_name)).unwrap();
+
+        assert_eq!(file_id_json, format!(r#"{{"fileId":"{}"}}"#, file_id));
+        assert_eq!(file_name_json, format!(r#"{{"fileName":"{}"}}"#, file_name));
+    }
 
     #[tokio::test]
     async fn test_auth() {

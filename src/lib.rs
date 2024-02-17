@@ -1,3 +1,5 @@
+//! A client for the Backblaze B2 Cloud Storage API.
+
 #![allow(unused)]
 
 #[macro_use]
@@ -21,6 +23,15 @@ pub use error::B2Error;
 
 const PREFIX: &str = "b2api/v3";
 const AUTH_HEADER: HeaderName = HeaderName::from_static("authorization");
+
+macro_rules! h {
+    ($headers:ident.$key:literal => $value:expr) => {
+        $headers.insert(
+            HeaderName::from_static($key), // NOTE: Header names must be lowercase
+            HeaderValue::from_str($value).expect("Unable to use header value"),
+        );
+    };
+}
 
 struct ClientState {
     /// The builder used to create the client.
@@ -229,7 +240,7 @@ impl Client {
         &self,
         file_id: &str,
         range: Option<headers::Range>,
-        encryption: Option<ServerSideEncryptionCustomer>,
+        encryption: Option<sse::ServerSideEncryptionCustomer>,
     ) -> Result<DownloadedFile, B2Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -375,33 +386,70 @@ pub struct DownloadedFile {
     pub info: models::B2FileHeaders,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ServerSideEncryptionCustomer {
-    /// The algorithm to use when encrypting/decrypting a file using SSE-C encryption. The only currently supported value is AES256.
-    #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Algorithm")]
-    pub algorithm: String,
+/// Server-Side Encryption (SSE) types and utilities
+///
+/// This module provides types and utilities for working with server-side encryption (SSE) in the B2 API.
+///
+/// The B2 API supports two types of server-side encryption:
+/// - SSE-B2: encryption provided by Backblaze
+/// - SSE-C: encryption provided by the client
+///
+/// SSE-B2 is the default encryption type, and is used when no encryption type is specified.
+/// SSE-C is used when the client provides an encryption key and the necessary headers.
+///
+/// The types in this module are used to specify the encryption type and provide the necessary headers for SSE-C.
+pub mod sse {
+    use super::{HeaderMap, HeaderName, HeaderValue};
 
-    /// The base64-encoded AES256 encryption key when encrypting/decrypting a file using SSE-C encryption.
-    #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Key")]
-    pub key: String,
+    /// Server-Side Encryption (SSE) with a customer-provided key (SSE-C)
+    #[derive(Debug, Serialize)]
+    pub struct ServerSideEncryptionCustomer {
+        /// The algorithm to use when encrypting/decrypting a file using SSE-C encryption. The only currently supported value is AES256.
+        #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Algorithm")]
+        pub algorithm: String,
 
-    /// The base64-encoded MD5 digest of the `X-Bz-Server-Side-Encryption-Customer-Key` when encrypting/decrypting a file using SSE-C encryption.
-    #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Key-Md5")]
-    pub key_md5: String,
-}
+        /// The base64-encoded AES256 encryption key when encrypting/decrypting a file using SSE-C encryption.
+        #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Key")]
+        pub key: String,
 
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub enum ServerSideEncryption {
-    /// SSE-B2 encryption
-    Standard {
-        /// The algorithm to use when encrypting/decrypting a file using SSE-B2 encryption. The only currently supported value is AES256.
-        #[serde(rename = "X-Bz-Server-Side-Encryption")]
-        algorithm: String,
-    },
+        /// The base64-encoded MD5 digest of the `X-Bz-Server-Side-Encryption-Customer-Key` when encrypting/decrypting a file using SSE-C encryption.
+        #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Key-Md5")]
+        pub key_md5: String,
+    }
 
-    /// SSE-C encryption
-    Customer(ServerSideEncryptionCustomer),
+    /// Server-Side Encryption (SSE) types
+    #[derive(Debug, Serialize)]
+    #[serde(untagged)]
+    pub enum ServerSideEncryption {
+        /// SSE-B2 encryption, the default encryption type.
+        Standard {
+            /// The algorithm to use when encrypting/decrypting a file using SSE-B2 encryption. The only currently supported value is AES256.
+            #[serde(rename = "X-Bz-Server-Side-Encryption")]
+            algorithm: String,
+        },
+
+        /// SSE-C encryption
+        Customer(ServerSideEncryptionCustomer),
+    }
+
+    impl ServerSideEncryptionCustomer {
+        pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
+            h!(headers."x-bz-server-side-encryption-customer-algorithm" => &self.algorithm);
+            h!(headers."x-bz-server-side-encryption-customer-key" => &self.key);
+            h!(headers."x-bz-server-side-encryption-customer-key-md5" => &self.key_md5);
+        }
+    }
+
+    impl ServerSideEncryption {
+        pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
+            match self {
+                ServerSideEncryption::Standard { algorithm } => {
+                    h!(headers."x-bz-server-side-encryption" => algorithm);
+                }
+                ServerSideEncryption::Customer(sse_c) => sse_c.add_headers(headers),
+            }
+        }
+    }
 }
 
 /// Info about a new whole file to be uploaded.
@@ -426,7 +474,7 @@ pub struct NewFileInfo {
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
-    encryption: Option<ServerSideEncryption>,
+    encryption: Option<sse::ServerSideEncryption>,
 }
 
 /// Info about a new part of a large file to be uploaded.
@@ -447,35 +495,7 @@ pub struct NewPartInfo {
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
-    encryption: Option<ServerSideEncryption>,
-}
-
-macro_rules! h {
-    ($headers:ident.$key:literal => $value:expr) => {
-        $headers.insert(
-            HeaderName::from_static($key), // NOTE: Header names must be lowercase
-            HeaderValue::from_str($value).expect("Unable to use header value"),
-        );
-    };
-}
-
-impl ServerSideEncryptionCustomer {
-    fn add_headers(&self, headers: &mut HeaderMap) {
-        h!(headers."x-bz-server-side-encryption-customer-algorithm" => &self.algorithm);
-        h!(headers."x-bz-server-side-encryption-customer-key" => &self.key);
-        h!(headers."x-bz-server-side-encryption-customer-key-md5" => &self.key_md5);
-    }
-}
-
-impl ServerSideEncryption {
-    fn add_headers(&self, headers: &mut HeaderMap) {
-        match self {
-            ServerSideEncryption::Standard { algorithm } => {
-                h!(headers."x-bz-server-side-encryption" => algorithm);
-            }
-            ServerSideEncryption::Customer(sse_c) => sse_c.add_headers(headers),
-        }
-    }
+    encryption: Option<sse::ServerSideEncryption>,
 }
 
 impl NewFileInfo {
@@ -604,7 +624,7 @@ impl UploadUrl {
 /// A large file that is being uploaded in parts.
 ///
 /// Any [`UploadPartUrl`] can be used to upload a part of the file. Once all parts have been uploaded,
-/// call [`LargeFile::finish`] to complete the upload.
+/// call [`LargeFileUpload::finish`] to complete the upload.
 pub struct LargeFileUpload {
     client: Client,
     info: models::B2FileInfo,
@@ -617,7 +637,7 @@ impl LargeFileUpload {
     }
 
     /// Uploads a part of a large file to the given upload URL. Once all parts have been uploaded,
-    /// call [`LargeFile::finish`] to complete the upload.
+    /// call [`LargeFileUpload::finish`] to complete the upload.
     ///
     /// Parts can be uploaded in parallel, so long as each url is only used for one part at a time.
     ///

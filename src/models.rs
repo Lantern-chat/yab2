@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+//! Models for the B2 API.
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use std::collections::HashMap;
 
 /// Creates the authorization header and token
 ///

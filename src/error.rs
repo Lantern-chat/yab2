@@ -1,7 +1,13 @@
+//! Error Handling types for the B2 API.
+
+/// The B2 API returns errors in a JSON format. This struct represents that format.
 #[derive(Debug, Deserialize)]
 pub struct B2ErrorMessage {
+    /// The HTTP status code.
     pub status: u16,
+    /// The B2 error code.
     pub code: String,
+    /// The error message.
     pub message: String,
 }
 
@@ -15,6 +21,10 @@ impl std::error::Error for B2ErrorMessage {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum B2Error {
+    /// The B2 API returned an error.
+    #[error("B2 Error Message: {0:?}")]
+    B2ErrorMessage(#[from] B2ErrorMessage),
+
     #[error("Reqwest Error: {0}")]
     ReqwestError(#[from] reqwest::Error),
 
@@ -26,9 +36,6 @@ pub enum B2Error {
 
     #[error("Unauthorized")]
     Unauthorized,
-
-    #[error("B2 Error Message: {0:?}")]
-    B2ErrorMessage(#[from] B2ErrorMessage),
 
     #[error("B2 File Header Error: {0}")]
     B2FileHeaderError(#[from] B2FileHeaderError),

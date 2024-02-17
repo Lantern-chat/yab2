@@ -172,27 +172,13 @@ pub struct B2FileRetentionValue {
     pub retain_until_timestamp: u64,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum B2ServerSideEncryption {
-    #[serde(skip_deserializing)]
-    Set(B2FileEncryptionHeaders),
-    Get {
-        #[serde(default)]
-        algorithm: Option<String>,
+#[derive(Default, Debug, Deserialize)]
+pub struct B2ServerSideEncryption {
+    #[serde(default)]
+    pub algorithm: Option<String>,
 
-        #[serde(default)]
-        mode: Option<String>,
-    },
-}
-
-impl Default for B2ServerSideEncryption {
-    fn default() -> Self {
-        B2ServerSideEncryption::Get {
-            algorithm: None,
-            mode: None,
-        }
-    }
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 #[derive(Default, Debug, Deserialize)]
@@ -239,52 +225,6 @@ pub struct B2PartInfo {
     pub server_side_encryption: B2ServerSideEncryption,
 
     pub upload_timestamp: u64,
-}
-
-impl B2FileInfo {
-    pub fn from_metadata(metadata: std::fs::Metadata, file_name: &str) -> B2FileInfo {
-        B2FileInfo {
-            file_name: file_name.to_string(),
-            content_length: metadata.len(),
-            replication_status: None,
-            ..Default::default()
-        }
-    }
-
-    pub fn add_headers(&self, headers: &mut HeaderMap) {
-        macro_rules! h {
-            ($key:literal => $value:expr) => {
-                headers.insert(
-                    HeaderName::from_static($key),
-                    HeaderValue::from_str($value).expect("Unable to use header value"),
-                );
-            };
-        }
-
-        h!("x-bz-file-name" => &self.file_name);
-        h!("content-length" => &self.content_length.to_string());
-
-        if let Some(ref sha1) = self.content_sha1 {
-            h!("x-bz-content-sha1" => sha1);
-        }
-
-        h!("content-type" => match self.content_type {
-            Some(ref ct) => ct,
-            None => "application/octet-stream", // default
-        });
-
-        if let B2ServerSideEncryption::Set(ref encryption) = self.server_side_encryption {
-            match encryption {
-                B2FileEncryptionHeaders::B2 { algorithm } => {
-                    h!("x-bz-server-side-encryption" => algorithm);
-                }
-                B2FileEncryptionHeaders::Customer { algorithm, key_md5 } => {
-                    h!("x-bz-server-side-encryption-customer-algorithm" => algorithm);
-                    h!("x-bz-server-side-encryption-customer-key-md5" => key_md5);
-                }
-            }
-        }
-    }
 }
 
 use headers::{CacheControl, ContentDisposition, ContentLength, ContentType, Expires, HeaderMapExt};

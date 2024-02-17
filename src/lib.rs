@@ -221,11 +221,15 @@ impl Client {
 
     /// Uses the `b2_download_file_by_id` API to download a file by its ID, returning a [`DownloadedFile`],
     /// which is a wrapper around a [`reqwest::Response`] and the file's parsed headers.
+    ///
+    /// The `range` parameter can be used to download only a portion of the file. If `None`, the entire file will be downloaded.
+    ///
+    /// The `encryption` parameter is only required if the file is encrypted with server-side encryption with a customer-provided key (SSE-C).
     pub async fn download_file_by_id(
         &self,
         file_id: &str,
         range: Option<headers::Range>,
-        encryption: Option<ServerSideEncryptionForDownload>,
+        encryption: Option<ServerSideEncryptionCustomer>,
     ) -> Result<DownloadedFile, B2Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -233,8 +237,7 @@ impl Client {
             file_id: &'a str,
         }
 
-        let range = &range;
-        let encryption = &encryption;
+        let (range, encryption) = (&range, &encryption);
 
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
@@ -254,9 +257,11 @@ impl Client {
             }
 
             if let Some(ref encryption) = encryption {
-                builder = builder.header("x-bz-server-side-encryption-customer-algorithm", &encryption.algorithm);
-                builder = builder.header("x-bz-server-side-encryption-customer-key", &encryption.key);
-                builder = builder.header("x-bz-server-side-encryption-customer-key-md5", &encryption.key_md5);
+                builder = builder.headers({
+                    let mut headers = HeaderMap::new();
+                    encryption.add_headers(&mut headers);
+                    headers
+                });
             }
 
             let resp = builder.send().await?;
@@ -347,7 +352,7 @@ impl Client {
                     .header(AUTH_HEADER, &state.auth)
                     .headers({
                         let mut headers = HeaderMap::new();
-                        info.add_headers(&mut headers);
+                        info.add_headers(&mut headers, true);
                         headers
                     })
                     .send()
@@ -371,7 +376,7 @@ pub struct DownloadedFile {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ServerSideEncryptionForDownload {
+pub struct ServerSideEncryptionCustomer {
     /// The algorithm to use when encrypting/decrypting a file using SSE-C encryption. The only currently supported value is AES256.
     #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Algorithm")]
     pub algorithm: String,
@@ -383,6 +388,20 @@ pub struct ServerSideEncryptionForDownload {
     /// The base64-encoded MD5 digest of the `X-Bz-Server-Side-Encryption-Customer-Key` when encrypting/decrypting a file using SSE-C encryption.
     #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Key-Md5")]
     pub key_md5: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ServerSideEncryption {
+    /// SSE-B2 encryption
+    Standard {
+        /// The algorithm to use when encrypting/decrypting a file using SSE-B2 encryption. The only currently supported value is AES256.
+        #[serde(rename = "X-Bz-Server-Side-Encryption")]
+        algorithm: String,
+    },
+
+    /// SSE-C encryption
+    Customer(ServerSideEncryptionCustomer),
 }
 
 /// Info about a new whole file to be uploaded.
@@ -407,7 +426,7 @@ pub struct NewFileInfo {
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
-    encryption: Option<models::B2ServerSideEncryption>,
+    encryption: Option<ServerSideEncryption>,
 }
 
 /// Info about a new part of a large file to be uploaded.
@@ -425,6 +444,10 @@ pub struct NewPartInfo {
     /// The SHA1 hash of the part's contents as a hex string.
     #[builder(setter(into))]
     content_sha1: String,
+
+    /// The server-side encryption to use when uploading the file.
+    #[builder(default)]
+    encryption: Option<ServerSideEncryption>,
 }
 
 macro_rules! h {
@@ -436,25 +459,37 @@ macro_rules! h {
     };
 }
 
-impl NewFileInfo {
+impl ServerSideEncryptionCustomer {
     fn add_headers(&self, headers: &mut HeaderMap) {
-        h!(headers."x-bz-file-name" => &self.file_name);
-        h!(headers."content-length" => &self.content_length.to_string());
-        h!(headers."content-type" => self.content_type.as_deref().unwrap_or("application/octet-stream"));
-        h!(headers."x-bz-content-sha1" => &self.content_sha1);
+        h!(headers."x-bz-server-side-encryption-customer-algorithm" => &self.algorithm);
+        h!(headers."x-bz-server-side-encryption-customer-key" => &self.key);
+        h!(headers."x-bz-server-side-encryption-customer-key-md5" => &self.key_md5);
+    }
+}
 
-        use models::{B2FileEncryptionHeaders, B2ServerSideEncryption};
-
-        if let Some(B2ServerSideEncryption::Set(ref encryption)) = self.encryption {
-            match encryption {
-                B2FileEncryptionHeaders::B2 { algorithm } => {
-                    h!(headers."x-bz-server-side-encryption" => algorithm);
-                }
-                B2FileEncryptionHeaders::Customer { algorithm, key_md5 } => {
-                    h!(headers."x-bz-server-side-encryption-customer-algorithm" => algorithm);
-                    h!(headers."x-bz-server-side-encryption-customer-key-md5" => key_md5);
-                }
+impl ServerSideEncryption {
+    fn add_headers(&self, headers: &mut HeaderMap) {
+        match self {
+            ServerSideEncryption::Standard { algorithm } => {
+                h!(headers."x-bz-server-side-encryption" => algorithm);
             }
+            ServerSideEncryption::Customer(sse_c) => sse_c.add_headers(headers),
+        }
+    }
+}
+
+impl NewFileInfo {
+    fn add_headers(&self, headers: &mut HeaderMap, parts: bool) {
+        h!(headers."x-bz-file-name" => &self.file_name);
+        h!(headers."content-type" => self.content_type.as_deref().unwrap_or("application/octet-stream"));
+
+        if !parts {
+            h!(headers."content-length" => &self.content_length.to_string());
+            h!(headers."x-bz-content-sha1" => &self.content_sha1);
+        }
+
+        if let Some(ref encryption) = self.encryption {
+            encryption.add_headers(headers);
         }
     }
 }
@@ -464,6 +499,10 @@ impl NewPartInfo {
         h!(headers."x-bz-part-number" => &self.part_number.to_string());
         h!(headers."content-length" => &self.content_length.to_string());
         h!(headers."x-bz-content-sha1" => &self.content_sha1);
+
+        if let Some(ref encryption) = self.encryption {
+            encryption.add_headers(headers);
+        }
     }
 }
 
@@ -541,7 +580,7 @@ impl UploadUrl {
                     .header(AUTH_HEADER, &url.auth)
                     .headers({
                         let mut headers = HeaderMap::new();
-                        info.add_headers(&mut headers);
+                        info.add_headers(&mut headers, false);
                         headers
                     })
                     .body(file())

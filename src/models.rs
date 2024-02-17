@@ -92,9 +92,12 @@ impl B2Authorized {
 /// to these different endpoints in parallel.
 #[derive(Debug, Deserialize)]
 pub struct B2UploadUrl {
-    /// The identifier for the bucket.
-    #[serde(alias = "bucketId")]
-    pub bucket_id: String,
+    /// The identifier for the bucket, if doing a simple upload.
+    #[serde(default, alias = "bucketId")]
+    pub bucket_id: Option<String>,
+
+    /// The identifier for the file, if doing a large file upload.
+    pub file_id: Option<String>,
 
     /// The URL that can be used to upload files to this bucket, see b2_upload_file.
     #[serde(alias = "uploadUrl")]

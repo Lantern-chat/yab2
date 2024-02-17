@@ -25,6 +25,9 @@ pub enum B2Error {
     #[error("B2 Error Message: {0:?}")]
     B2ErrorMessage(#[from] B2ErrorMessage),
 
+    #[error("IO Error: {0}")]
+    IOError(#[from] std::io::Error),
+
     #[error("Reqwest Error: {0}")]
     ReqwestError(#[from] reqwest::Error),
 
@@ -48,6 +51,12 @@ pub enum B2Error {
 
     #[error("Missing Capability: {0}")]
     MissingCapability(&'static str),
+
+    #[error("Missing File Name")]
+    MissingFileName,
+
+    #[error("Invalid File Id For Upload Url")]
+    FileIdMismatch,
 }
 
 #[derive(Debug, thiserror::Error)]

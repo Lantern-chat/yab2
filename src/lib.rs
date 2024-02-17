@@ -306,12 +306,17 @@ impl Client {
     async fn get_b2_upload_url(
         &self,
         bucket_id: Option<&str>,
+        file_id: Option<&str>,
         in_parts: bool,
     ) -> Result<models::B2UploadUrl, B2Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct B2GetUploadUrlQuery<'a> {
-            bucket_id: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            bucket_id: Option<&'a str>,
+
+            #[serde(skip_serializing_if = "Option::is_none")]
+            file_id: Option<&'a str>,
         }
 
         self.run_request_with_reauth(|b2| async move {
@@ -324,11 +329,17 @@ impl Client {
                 b2.client.request(Method::GET, path).header(AUTH_HEADER, &state.auth)
             };
 
-            let Some(bucket_id) = bucket_id.or_else(|| state.account.api.storage.bucket_id.as_deref()) else {
-                return Err(B2Error::MissingBucketId);
-            };
+            let mut query = B2GetUploadUrlQuery { bucket_id, file_id };
 
-            let resp = builder.query(&B2GetUploadUrlQuery { bucket_id }).send().await?;
+            if query.file_id.is_none() && query.bucket_id.is_none() {
+                query.bucket_id = state.account.api.storage.bucket_id.as_deref();
+
+                if query.bucket_id.is_none() {
+                    return Err(B2Error::MissingBucketId);
+                }
+            }
+
+            let resp = builder.query(&query).send().await?;
             let url: models::B2UploadUrl = Self::json(resp).await?;
 
             Ok(url)
@@ -336,8 +347,13 @@ impl Client {
         .await
     }
 
-    async fn get_raw_upload_url(&self, bucket_id: Option<&str>, in_parts: bool) -> Result<RawUploadUrl, B2Error> {
-        let url = self.get_b2_upload_url(bucket_id, in_parts).await?;
+    async fn get_raw_upload_url(
+        &self,
+        bucket_id: Option<&str>,
+        file_id: Option<&str>,
+        in_parts: bool,
+    ) -> Result<RawUploadUrl, B2Error> {
+        let url = self.get_b2_upload_url(bucket_id, file_id, in_parts).await?;
 
         Ok(RawUploadUrl {
             in_parts,
@@ -354,21 +370,19 @@ impl Client {
     /// The returned `UploadUrl` can be used to upload files to the B2 API for 24 hours. Only one file can be uploaded to a URL at a time.
     /// You may acquire multiple URLs to upload multiple files in parallel.
     pub async fn get_upload_url(&self, bucket_id: Option<&str>) -> Result<UploadUrl, B2Error> {
-        Ok(UploadUrl(self.get_raw_upload_url(bucket_id, false).await?))
+        Ok(UploadUrl(self.get_raw_upload_url(bucket_id, None, false).await?))
     }
 
     /// Gets a URL for uploading parts of a large file using the `b2_get_upload_part_url` API.
     ///
-    /// If `bucket_id` is `None`, the client's default bucket will be used. If there is no default bucket, an error will be returned.
-    ///
     /// The returned `UploadPartUrl` can be used to upload parts of a large file to the B2 API for 24 hours.
     /// Only one part can be uploaded to a URL at a time. You may acquire multiple URLs to upload multiple parts in parallel.
-    pub async fn get_upload_part_url(&self, bucket_id: Option<&str>) -> Result<UploadPartUrl, B2Error> {
-        Ok(UploadPartUrl(self.get_raw_upload_url(bucket_id, true).await?))
+    pub async fn get_upload_part_url(&self, file_id: &str) -> Result<UploadPartUrl, B2Error> {
+        Ok(UploadPartUrl(self.get_raw_upload_url(None, Some(file_id), true).await?))
     }
 
     /// Prepares parts of a large file for uploading using the `b2_start_large_file` API.
-    pub async fn start_large_file(&self, info: &NewFileInfo) -> Result<LargeFileUpload, B2Error> {
+    pub async fn start_large_file(&self, info: &NewLargeFileInfo) -> Result<LargeFileUpload, B2Error> {
         let info = self
             .run_request_with_reauth(|b2| async move {
                 let state = b2.state.read().await;
@@ -381,7 +395,7 @@ impl Client {
                     .header(AUTH_HEADER, &state.auth)
                     .headers({
                         let mut headers = HeaderMap::new();
-                        info.add_headers(&mut headers, true);
+                        info.add_headers(&mut headers);
                         headers
                     })
                     .send()
@@ -477,22 +491,48 @@ pub mod sse {
 pub struct NewFileInfo {
     /// The name of the new file.
     #[builder(setter(into))]
-    file_name: String,
+    pub file_name: String,
 
     /// The length of the file in bytes.
-    content_length: u64,
+    pub content_length: u64,
 
     /// The MIME type of the file.
+    ///
+    /// Will default to `application/octet-stream` if not provided,
+    /// or if specified to be `bz/x-auto` then the B2 API will attempt to
+    /// determine the file's content type automatically.
     #[builder(default, setter(into))]
-    content_type: Option<String>,
+    pub content_type: Option<String>,
 
     /// The SHA1 hash of the file's contents as a hex string.
     #[builder(setter(into))]
-    content_sha1: String,
+    pub content_sha1: String,
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
-    encryption: Option<sse::ServerSideEncryption>,
+    pub encryption: Option<sse::ServerSideEncryption>,
+}
+
+/// Info about a new large file to be uploaded.
+///
+/// This omits the `content_length`, `content_sha1` and `encryption` fields,
+/// due to the file being uploaded in parts. Each part will have its own `content_length`,
+/// `content_sha1` and `encryption` fields.
+///
+/// See the documentation for [`NewLargeFileInfo::builder`] for more information.
+#[derive(Debug, typed_builder::TypedBuilder)]
+pub struct NewLargeFileInfo {
+    /// The name of the new file.
+    #[builder(setter(into))]
+    pub file_name: String,
+
+    /// The MIME type of the file.
+    ///
+    /// Will default to `application/octet-stream` if not provided,
+    /// or if specified to be `bz/x-auto` then the B2 API will attempt to
+    /// determine the file's content type automatically.
+    #[builder(default, setter(into))]
+    pub content_type: Option<String>,
 }
 
 /// Info about a new part of a large file to be uploaded.
@@ -502,33 +542,37 @@ pub struct NewFileInfo {
 pub struct NewPartInfo {
     /// The part number of the new large file part.
     #[builder(setter(into))]
-    part_number: NonZeroU32,
+    pub part_number: NonZeroU32,
 
     /// The length of the part in bytes.
-    content_length: u64,
+    pub content_length: u64,
 
     /// The SHA1 hash of the part's contents as a hex string.
     #[builder(setter(into))]
-    content_sha1: String,
+    pub content_sha1: String,
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
-    encryption: Option<sse::ServerSideEncryption>,
+    pub encryption: Option<sse::ServerSideEncryption>,
 }
 
 impl NewFileInfo {
-    fn add_headers(&self, headers: &mut HeaderMap, parts: bool) {
+    fn add_headers(&self, headers: &mut HeaderMap) {
         h!(headers."x-bz-file-name" => &self.file_name);
         h!(headers."content-type" => self.content_type.as_deref().unwrap_or("application/octet-stream"));
-
-        if !parts {
-            h!(headers."content-length" => &self.content_length.to_string());
-            h!(headers."x-bz-content-sha1" => &self.content_sha1);
-        }
+        h!(headers."content-length" => &self.content_length.to_string());
+        h!(headers."x-bz-content-sha1" => &self.content_sha1);
 
         if let Some(ref encryption) = self.encryption {
             encryption.add_headers(headers);
         }
+    }
+}
+
+impl NewLargeFileInfo {
+    fn add_headers(&self, headers: &mut HeaderMap) {
+        h!(headers."x-bz-file-name" => &self.file_name);
+        h!(headers."content-type" => self.content_type.as_deref().unwrap_or("application/octet-stream"));
     }
 }
 
@@ -578,15 +622,30 @@ impl RawUploadUrl {
     /// Actually performs the upload, with automatic reauthorization if necessary.
     async fn do_upload<F, T>(&mut self, f: F) -> Result<T, B2Error>
     where
-        F: Fn(&Self) -> reqwest::RequestBuilder,
+        F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
         T: serde::de::DeserializeOwned,
     {
         loop {
-            let res = async { Client::json(f(self).send().await?).await };
+            let res = async {
+                let builder = self
+                    .client
+                    .inner_client()
+                    .request(reqwest::Method::POST, &self.url.upload_url)
+                    .header(AUTH_HEADER, &self.auth);
+
+                Client::json(f(builder).send().await?).await
+            };
 
             return match res.await {
                 Err(B2Error::B2ErrorMessage(e)) if e.status == 401 => {
-                    let url = self.client.get_b2_upload_url(Some(&self.url.bucket_id), self.in_parts).await?;
+                    let url = self
+                        .client
+                        .get_b2_upload_url(
+                            self.url.bucket_id.as_deref(),
+                            self.url.file_id.as_deref(),
+                            self.in_parts,
+                        )
+                        .await?;
 
                     self.auth = url.header();
                     self.url = url;
@@ -596,6 +655,36 @@ impl RawUploadUrl {
                 res => res,
             };
         }
+    }
+
+    pub async fn upload_file<F, B>(&mut self, info: &NewFileInfo, file: F) -> Result<models::B2FileInfo, B2Error>
+    where
+        F: Fn() -> B,
+        B: Into<reqwest::Body>,
+    {
+        self.do_upload(|builder| {
+            builder.body(file()).headers({
+                let mut headers = HeaderMap::new();
+                info.add_headers(&mut headers);
+                headers
+            })
+        })
+        .await
+    }
+
+    pub async fn upload_part<F, B>(&mut self, info: &NewPartInfo, body: F) -> Result<models::B2PartInfo, B2Error>
+    where
+        F: Fn() -> B,
+        B: Into<reqwest::Body>,
+    {
+        self.do_upload(|builder| {
+            builder.body(body()).headers({
+                let mut headers = HeaderMap::new();
+                info.add_headers(&mut headers);
+                headers
+            })
+        })
+        .await
     }
 }
 
@@ -610,20 +699,7 @@ impl UploadUrl {
         F: Fn() -> B,
         B: Into<reqwest::Body>,
     {
-        self.0
-            .do_upload(|url| {
-                let client = url.client.inner_client();
-                client
-                    .request(reqwest::Method::POST, &url.url.upload_url)
-                    .header(AUTH_HEADER, &url.auth)
-                    .headers({
-                        let mut headers = HeaderMap::new();
-                        info.add_headers(&mut headers, false);
-                        headers
-                    })
-                    .body(file())
-            })
-            .await
+        self.0.upload_file(info, file).await
     }
 
     /// Uploads a file to the B2 API using the URL acquired from [`Client::get_upload_url`].
@@ -649,15 +725,29 @@ pub struct LargeFileUpload {
 }
 
 impl LargeFileUpload {
+    pub fn info(&self) -> &models::B2FileInfo {
+        &self.info
+    }
+
     /// Equivalent to [`Client::start_large_file`].
-    pub async fn start(client: &Client, info: &NewFileInfo) -> Result<LargeFileUpload, B2Error> {
+    pub async fn start(client: &Client, info: &NewLargeFileInfo) -> Result<LargeFileUpload, B2Error> {
         client.start_large_file(info).await
+    }
+
+    /// Gets a URL for uploading a part of the large file.
+    ///
+    /// Equivalent to [`Client::get_upload_part_url`] with `self.info().file_id`.
+    pub async fn get_upload_part_url(&self) -> Result<UploadPartUrl, B2Error> {
+        self.client.get_upload_part_url(&self.info.file_id).await
     }
 
     /// Uploads a part of a large file to the given upload URL. Once all parts have been uploaded,
     /// call [`LargeFileUpload::finish`] to complete the upload.
     ///
     /// Parts can be uploaded in parallel, so long as each url is only used for one part at a time.
+    ///
+    /// The provided `url` must have been acquired from the same `LargeFileUpload` instance, as they
+    /// are specific to the file being uploaded.
     ///
     /// The `body` parameter is a closure that returns a value to be converted into a [`reqwest::Body`], and
     /// may need to be called multiple times if the request needs to be retried. Therefore, it is recommended
@@ -672,20 +762,11 @@ impl LargeFileUpload {
         F: Fn() -> B,
         B: Into<reqwest::Body>,
     {
-        url.0
-            .do_upload(|url| {
-                let client = url.client.inner_client();
-                client
-                    .request(reqwest::Method::POST, &url.url.upload_url)
-                    .header(AUTH_HEADER, &url.auth)
-                    .headers({
-                        let mut headers = HeaderMap::new();
-                        info.add_headers(&mut headers);
-                        headers
-                    })
-                    .body(body())
-            })
-            .await
+        if url.0.url.file_id.as_deref() != Some(self.info.file_id.as_str()) {
+            return Err(B2Error::FileIdMismatch);
+        }
+
+        url.0.upload_part(info, body).await
     }
 
     pub async fn upload_part_bytes(
@@ -771,13 +852,6 @@ impl LargeFileUpload {
                 Client::json(resp).await
             })
             .await
-    }
-}
-
-impl std::ops::Deref for LargeFileUpload {
-    type Target = Client;
-    fn deref(&self) -> &Self::Target {
-        &self.client
     }
 }
 

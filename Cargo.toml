@@ -6,8 +6,10 @@ repository = "https://github.com/Lantern-chat/b2"
 license = "GPL-3.0-only"
 
 [features]
-default = ["fs"]
-fs = ["tokio/fs", "tokio/macros", "hex", "sha1", "tokio-stream"]
+default = ["fs", "pool"]
+fs = ["tokio/fs", "tokio/macros", "hex", "sha1", "tokio-stream", "futures"]
+pool = ["parking_lot"]
+large_buffers = []
 
 [dependencies]
 base64 = "0.21.7"
@@ -21,9 +23,11 @@ typed-builder = "0.18.1"
 failsafe = "1.2.0"
 bytes = "1.5.0"
 
+parking_lot = { version = "0.12", optional = true }
 hex = { version = "0.4.3", optional = true }
 sha1 = { version = "0.10.6", optional = true }
 tokio-stream = { version = "0.1.14", optional = true, default-features = false }
+futures = { version = "0.3.30", optional = true }
 
 [dev-dependencies]
 dotenv = "0.15.0"

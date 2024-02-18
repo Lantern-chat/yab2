@@ -1,7 +1,5 @@
 //! A client for the Backblaze B2 Cloud Storage API.
 
-#![allow(unused)]
-
 #[macro_use]
 extern crate serde;
 
@@ -15,6 +13,9 @@ use tokio::sync::RwLock;
 
 pub mod error;
 pub mod models;
+
+#[cfg(feature = "pool")]
+pub mod pool;
 
 #[cfg(feature = "fs")]
 mod fs;
@@ -357,7 +358,6 @@ impl Client {
         let url = self.get_b2_upload_url(bucket_id, file_id).await?;
 
         Ok(RawUploadUrl {
-            in_parts: file_id.is_some(),
             client: self.clone(),
             auth: url.header(),
             url,
@@ -599,7 +599,6 @@ impl NewPartInfo {
 }
 
 struct RawUploadUrl {
-    in_parts: bool,
     client: Client,
     url: models::B2UploadUrl,
     auth: HeaderValue,

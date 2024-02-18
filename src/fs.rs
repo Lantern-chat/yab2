@@ -91,28 +91,28 @@ fn generate_file_upload_callback(file: Arc<Mutex<File>>, start: u64, end: u64) -
 /// See the documentation for [`NewFileFromPath::builder`] for more information.
 #[derive(Debug, typed_builder::TypedBuilder)]
 pub struct NewFileFromPath<'a> {
-    path: &'a Path,
+    pub path: &'a Path,
 
     /// The name of the new file.
     ///
     /// If not provided, the file name will be the same as the file
     /// name on the local file system.
     #[builder(default, setter(into))]
-    file_name: Option<String>,
+    pub file_name: Option<String>,
 
     /// The MIME type of the file.
     #[builder(default, setter(into))]
-    content_type: Option<String>,
+    pub content_type: Option<String>,
 
     /// The maximum number of connections to use when uploading the file.
     ///
     /// If set to 0, the default number of connections will be used.
     #[builder(default, setter(into))]
-    max_simultaneous_uploads: u8,
+    pub max_simultaneous_uploads: u8,
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
-    encryption: Option<sse::ServerSideEncryption>,
+    pub encryption: Option<sse::ServerSideEncryption>,
 }
 
 impl Client {
@@ -195,30 +195,5 @@ impl Client {
         }
 
         large.finish(&parts).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_large_file() {
-        dotenv::dotenv().ok();
-
-        let app_id = std::env::var("APP_ID").expect("APP_ID not found in .env");
-        let app_key = std::env::var("APP_KEY").expect("APP_KEY not found in .env");
-
-        let client = ClientBuilder::new(&app_id, &app_key).authorize().await.unwrap();
-
-        let info = NewFileFromPath::builder()
-            .path(r#"testing.webm"#.as_ref())
-            .content_type("video/webm".to_owned())
-            .file_name("testing.webm".to_owned())
-            .build();
-
-        let file = client.upload_from_path(info, None, None).await.unwrap();
-
-        println!("{:?}", file);
     }
 }

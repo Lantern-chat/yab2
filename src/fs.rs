@@ -23,7 +23,7 @@ type DynError = Box<dyn Error + Send + Sync + 'static>;
 use crate::*;
 
 #[cfg(not(feature = "large_buffers"))]
-const DEFAULT_BUF_SIZE: usize = 16 * 1024;
+const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 
 #[cfg(feature = "large_buffers")]
 const DEFAULT_BUF_SIZE: usize = 64 * 1024;
@@ -165,28 +165,32 @@ impl Client {
 
         // small file, upload as a single file
         if length <= recommended_part_size {
-            let mut new_url; // store the new URL if we have to get one
-            let url = match existing_url {
-                Some(url) => url,
-                None => {
-                    new_url = Some(self.get_upload_url(bucket_id).await?);
+            // Box the future to avoid bloating the stack too much, especially with large DEFAULT_BUF_SIZE
+            let do_upload = Box::pin(async move {
+                let mut new_url; // store the new URL if we have to get one
+                let url = match existing_url {
+                    Some(url) => url,
+                    None => {
+                        new_url = Some(self.get_upload_url(bucket_id).await?);
+                        new_url.as_mut().unwrap()
+                    }
+                };
 
-                    new_url.as_mut().unwrap()
-                }
-            };
+                let content_length = metadata.len();
+                let content_sha1 = hash_chunk(&mut file, 0, length).await?;
 
-            let content_length = metadata.len();
-            let content_sha1 = hash_chunk(&mut file, 0, length).await?;
+                let file = Arc::new(Mutex::new(file));
+                let whole_info = NewFileInfo::builder()
+                    .file_name(file_name)
+                    .content_type(info.content_type)
+                    .content_length(content_length)
+                    .content_sha1(content_sha1)
+                    .build();
 
-            let file = Arc::new(Mutex::new(file));
-            let whole_info = NewFileInfo::builder()
-                .file_name(file_name)
-                .content_type(info.content_type)
-                .content_length(content_length)
-                .content_sha1(content_sha1)
-                .build();
+                url.upload_file(&whole_info, generate_file_upload_callback(file, 0, length)).await
+            });
 
-            return url.upload_file(&whole_info, generate_file_upload_callback(file, 0, length)).await;
+            return do_upload.await;
         }
 
         drop(file); // TODO: Reuse the file handle somehow?
@@ -202,9 +206,9 @@ impl Client {
         let whole_info =
             NewLargeFileInfo::builder().file_name(file_name).content_type(info.content_type.take()).build();
 
-        let large = self.start_large_file(bucket_id, &whole_info).await?;
+        let large = self.start_large_file(bucket_id, &whole_info).boxed().await?;
 
-        let num_parts = 1 + (length - 1) / recommended_part_size;
+        let num_parts = length.div_ceil(recommended_part_size);
 
         struct SharedInfo {
             large: LargeFileUpload,
@@ -229,7 +233,8 @@ impl Client {
             Ok::<_, B2Error>((info.clone(), Arc::new(Mutex::new(file)), url))
         });
 
-        let doing_uploads = files_and_urls.map_ok(|(info, file, mut url)| async move {
+        let do_uploads = files_and_urls.map_ok(|(info, file, mut url)| async move {
+            // spawn in new task for real parallelism, at least when using the multi-threaded runtime
             let parts = tokio::spawn(async move {
                 let mut parts = Vec::new();
 
@@ -270,15 +275,18 @@ impl Client {
             parts.await.expect("Unable to upload") // only really happens if panic occurs
         });
 
-        let mut parts = doing_uploads
+        // Box the future to avoid bloating the stack too much, especially with large DEFAULT_BUF_SIZE
+        let mut parts = Box::pin(do_uploads)
             .try_buffer_unordered(max_simultaneous_uploads)
             .try_flatten_unordered(max_simultaneous_uploads)
             .try_collect::<Vec<_>>()
-            .boxed()
             .await?;
 
         parts.sort_unstable_by_key(|part| part.part_number);
 
-        Arc::try_unwrap(info).unwrap_or_else(|_| unreachable!()).large.finish(&parts).await
+        // done sharing the info now, can safely unwrap it
+        let info = unsafe { Arc::try_unwrap(info).unwrap_unchecked() };
+
+        info.large.finish(&parts).boxed().await
     }
 }

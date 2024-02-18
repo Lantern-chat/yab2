@@ -5,6 +5,7 @@
 #[macro_use]
 extern crate serde;
 
+use futures::FutureExt;
 use headers::HeaderMapExt;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
@@ -196,7 +197,9 @@ impl Client {
             return match f(self.clone()).await {
                 Ok(t) => Ok(t),
                 Err(B2Error::B2ErrorMessage(e)) if !retried && e.status == 401 => {
-                    self.reauthorize().await?;
+                    // box future to avoid stack bloat
+                    self.reauthorize().boxed().await?;
+
                     retried = true;
                     continue;
                 }
@@ -647,6 +650,7 @@ impl RawUploadUrl {
                     let url = self
                         .client
                         .get_b2_upload_url(self.url.bucket_id.as_deref(), self.url.file_id.as_deref())
+                        .boxed()
                         .await?;
 
                     self.auth = url.header();

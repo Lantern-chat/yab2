@@ -91,29 +91,27 @@ impl B2Authorized {
 /// To achieve faster upload speeds, request multiple upload urls and upload your files
 /// to these different endpoints in parallel.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct B2UploadUrl {
     /// The identifier for the bucket, if doing a simple upload.
-    #[serde(default, alias = "bucketId")]
     pub bucket_id: Option<String>,
 
     /// The identifier for the file, if doing a large file upload.
     pub file_id: Option<String>,
 
     /// The URL that can be used to upload files to this bucket, see b2_upload_file.
-    #[serde(alias = "uploadUrl")]
     pub upload_url: String,
 
-    /// The authorizationToken that must be used when uploading files to this bucket.
+    /// The authorization token that must be used when uploading files to this bucket.
     ///
     /// This token is valid for 24 hours or until the uploadUrl endpoint rejects an upload,
     /// see b2_upload_file
-    #[serde(alias = "authorizationToken")]
-    pub auth_token: String,
+    pub authorization_token: String,
 }
 
 impl B2UploadUrl {
     pub fn header(&self) -> HeaderValue {
-        HeaderValue::from_str(&self.auth_token).expect("Unable to use auth token in header value")
+        HeaderValue::from_str(&self.authorization_token).expect("Unable to use auth token in header value")
     }
 }
 

@@ -1,10 +1,10 @@
 use sha1::{Digest, Sha1};
 use std::error::Error;
 use std::{io::SeekFrom, path::Path, sync::Arc};
-use tokio::sync::Mutex;
 
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::sync::Mutex;
 
 use reqwest::Body;
 
@@ -121,14 +121,14 @@ impl Client {
     /// If the file is larger than the recommended part size, it will be uploaded in parts as a large file.
     /// Otherwise it will be uploaded as a single file, making use of the existing URL if provided.
     pub async fn upload_from_path(
-        &mut self,
+        &self,
         mut info: NewFileFromPath<'_>,
         bucket_id: Option<&str>,
         existing_url: Option<&mut UploadUrl>,
     ) -> Result<models::B2FileInfo, B2Error> {
         let mut file = tokio::fs::File::open(info.path).await?;
 
-        let (metadata, part_size) = tokio::join!(file.metadata(), async {
+        let (metadata, recommended_part_size) = tokio::join!(file.metadata(), async {
             self.state.read().await.account.api.storage.recommended_part_size
         });
 
@@ -140,7 +140,8 @@ impl Client {
             None => info.path.file_name().ok_or(B2Error::MissingFileName)?.to_string_lossy().into_owned(),
         };
 
-        if length <= part_size {
+        // small file, upload as a single file
+        if length <= recommended_part_size {
             let mut url = self.get_upload_url(bucket_id).await?;
 
             let content_length = metadata.len();
@@ -158,9 +159,66 @@ impl Client {
         }
 
         let whole_info = NewLargeFileInfo::builder().file_name(file_name).content_type(info.content_type).build();
+        let large = self.start_large_file(bucket_id, &whole_info).await?;
 
-        let large = self.start_large_file(&whole_info).await?;
+        let mut url = large.get_upload_part_url().await?;
 
-        unimplemented!("WIP")
+        let file = Arc::new(Mutex::new(file));
+
+        let num_parts = 1 + (length - 1) / recommended_part_size;
+
+        let mut parts = Vec::with_capacity(num_parts as usize);
+        let mut start = 0;
+
+        // TODO: Upload parts in parallel using num_parts and for_each_concurrent or similar
+        while start < length {
+            let end = (start + recommended_part_size).min(length);
+
+            let content_length = end - start;
+
+            let sha1 = hash_chunk(&mut *file.lock().await, start, end).await?;
+
+            let info = NewPartInfo::builder()
+                .content_sha1(sha1)
+                .content_length(content_length)
+                .part_number(unsafe { NonZeroU32::new_unchecked(parts.len() as u32 + 1) })
+                .encryption(info.encryption.clone())
+                .build();
+
+            let part = large
+                .upload_part(&mut url, &info, generate_file_upload_callback(file.clone(), start, end))
+                .await?;
+
+            parts.push(part);
+
+            start = end;
+        }
+
+        large.finish(&parts).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_large_file() {
+        dotenv::dotenv().ok();
+
+        let app_id = std::env::var("APP_ID").expect("APP_ID not found in .env");
+        let app_key = std::env::var("APP_KEY").expect("APP_KEY not found in .env");
+
+        let client = ClientBuilder::new(&app_id, &app_key).authorize().await.unwrap();
+
+        let info = NewFileFromPath::builder()
+            .path(r#"testing.webm"#.as_ref())
+            .content_type("video/webm".to_owned())
+            .file_name("testing.webm".to_owned())
+            .build();
+
+        let file = client.upload_from_path(info, None, None).await.unwrap();
+
+        println!("{:?}", file);
     }
 }

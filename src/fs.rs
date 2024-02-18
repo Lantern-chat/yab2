@@ -6,7 +6,7 @@ use std::{io::SeekFrom, path::Path, sync::Arc};
 use futures::FutureExt;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use futures::{
     future::TryFutureExt,
@@ -57,7 +57,7 @@ async fn forward_file_to_tx(
     file: &mut File,
     start: u64,
     end: u64,
-    tx: tokio::sync::mpsc::Sender<Result<Bytes, DynError>>,
+    tx: mpsc::Sender<Result<Bytes, DynError>>,
 ) -> Result<(), B2Error> {
     file.seek(SeekFrom::Start(start)).await?;
 
@@ -193,10 +193,10 @@ impl Client {
 
         let max_simultaneous_uploads = match info.max_simultaneous_uploads {
             0 => match std::thread::available_parallelism() {
-                Ok(threads) => threads.get().min(8) as u8,
+                Ok(threads) => threads.get().min(8),
                 Err(_) => 1,
             },
-            _ => info.max_simultaneous_uploads,
+            _ => info.max_simultaneous_uploads as usize,
         };
 
         let whole_info =
@@ -240,8 +240,6 @@ impl Client {
                         break;
                     }
 
-                    //println!("Uploading part {}/{}", part_number, num_parts);
-
                     let start = part_number as u64 * recommended_part_size;
                     let end = (start + recommended_part_size).min(length);
 
@@ -264,19 +262,17 @@ impl Client {
                     let part = info.large.upload_part(&mut url, &part_info, cb).await?;
 
                     parts.push(Ok::<_, B2Error>(part));
-
-                    //println!("Uploaded part {}/{}", part_number, num_parts);
                 }
 
                 Ok::<_, B2Error>(stream::iter(parts))
             });
 
-            parts.await.unwrap()
+            parts.await.expect("Unable to upload") // only really happens if panic occurs
         });
 
         let mut parts = doing_uploads
-            .try_buffer_unordered(max_simultaneous_uploads as usize)
-            .try_flatten_unordered(max_simultaneous_uploads as usize)
+            .try_buffer_unordered(max_simultaneous_uploads)
+            .try_flatten_unordered(max_simultaneous_uploads)
             .try_collect::<Vec<_>>()
             .boxed()
             .await?;

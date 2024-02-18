@@ -13,6 +13,7 @@ use futures::{
     stream::{self, StreamExt, TryStreamExt},
 };
 
+use bytes::{Bytes, BytesMut};
 use reqwest::Body;
 
 use sha1::{Digest, Sha1};
@@ -39,14 +40,14 @@ async fn hash_chunk(file: &mut File, start: u64, end: u64) -> Result<String, B2E
 
     while read < chunk_length {
         let remaining = (chunk_length - read).min(DEFAULT_BUF_SIZE as u64) as usize;
-        let n = file.read(&mut buf[..remaining]).await?;
 
-        if n == 0 {
-            break;
+        let mut write_buf = &mut buf[..remaining];
+        while !write_buf.is_empty() {
+            file.read_buf(&mut write_buf).await?;
         }
 
-        sha1.update(&buf[..n]);
-        read += n as u64;
+        sha1.update(&buf[..remaining]);
+        read += remaining as u64;
     }
 
     Ok(hex::encode(sha1.finalize()))
@@ -56,25 +57,31 @@ async fn forward_file_to_tx(
     file: &mut File,
     start: u64,
     end: u64,
-    tx: tokio::sync::mpsc::Sender<Result<Vec<u8>, DynError>>,
+    tx: tokio::sync::mpsc::Sender<Result<Bytes, DynError>>,
 ) -> Result<(), B2Error> {
     file.seek(SeekFrom::Start(start)).await?;
 
     let chunk_length = end - start;
-
     let mut read = 0;
-    let mut buf = [0; DEFAULT_BUF_SIZE];
 
     while read < chunk_length {
         let remaining = (chunk_length - read).min(DEFAULT_BUF_SIZE as u64) as usize;
-        let n = file.read(&mut buf[..remaining]).await?;
 
-        if n == 0 {
-            break;
+        let mut buf = BytesMut::with_capacity(remaining);
+
+        // The buf won't resize unless these are equal, so stop it before then.
+        while buf.len() < buf.capacity() {
+            file.read_buf(&mut buf).await?;
         }
 
-        tx.send(Ok(buf[..n].to_vec())).await.map_err(|_| B2Error::Unknown)?;
-        read += n as u64;
+        assert_eq!(buf.len(), remaining);
+        assert_eq!(buf.len(), buf.capacity());
+
+        read += buf.len() as u64;
+
+        if let Err(_) = tx.send(Ok(buf.freeze())).await {
+            return Err(B2Error::Unknown);
+        }
     }
 
     Ok(())

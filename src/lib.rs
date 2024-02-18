@@ -1,5 +1,7 @@
 //! A client for the Backblaze B2 Cloud Storage API.
 
+#![allow(clippy::redundant_pattern_matching)]
+
 #[macro_use]
 extern crate serde;
 
@@ -941,6 +943,26 @@ mod tests {
             .path(r#"testing.webm"#.as_ref())
             .content_type("video/webm".to_owned())
             .file_name("testing.webm".to_owned())
+            .build();
+
+        let file = client.upload_from_path(info, None, None).await.unwrap();
+
+        println!("{:?}", file);
+    }
+
+    #[tokio::test]
+    async fn test_small_file() {
+        dotenv::dotenv().ok();
+
+        let app_id = std::env::var("APP_ID").expect("APP_ID not found in .env");
+        let app_key = std::env::var("APP_KEY").expect("APP_KEY not found in .env");
+
+        let client = ClientBuilder::new(&app_id, &app_key).authorize().await.unwrap();
+
+        let info = NewFileFromPath::builder()
+            .path(r#"Cargo.toml"#.as_ref())
+            .content_type("test/plain".to_owned())
+            .file_name("Cargo.toml".to_owned())
             .build();
 
         let file = client.upload_from_path(info, None, None).await.unwrap();

@@ -8,10 +8,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::{mpsc, Mutex};
 
-use futures::{
-    future::TryFutureExt,
-    stream::{self, StreamExt, TryStreamExt},
-};
+use futures::stream::{self, StreamExt, TryStreamExt};
 
 use bytes::{Bytes, BytesMut};
 use reqwest::Body;
@@ -193,8 +190,6 @@ impl Client {
             return do_upload.await;
         }
 
-        drop(file); // TODO: Reuse the file handle somehow?
-
         let max_simultaneous_uploads = match info.max_simultaneous_uploads {
             0 => match std::thread::available_parallelism() {
                 Ok(threads) => threads.get().min(8),
@@ -224,22 +219,29 @@ impl Client {
             part: AtomicU32::new(0),
         });
 
-        let files_and_urls = stream::iter(0..max_simultaneous_uploads).then(|_| async {
-            let (file, url) = tokio::try_join!(
-                File::open(&info.path).map_err(B2Error::from),
-                info.large.get_upload_part_url()
-            )?;
+        // inject the old file handle for the first iteration
+        let old_files = stream::iter([Some(file)]).chain(stream::repeat_with(|| None));
+
+        // use the old file handle for the first iteration, then open a new one for the rest and get the upload URL
+        let files_and_urls = old_files.take(max_simultaneous_uploads).then(|old_file| async {
+            let (url, file) = tokio::try_join!(info.large.get_upload_part_url(), async {
+                Ok(match old_file {
+                    Some(file) => file,
+                    None => File::open(&info.path).await?,
+                })
+            })?;
 
             Ok::<_, B2Error>((info.clone(), Arc::new(Mutex::new(file)), url))
         });
 
+        // for each file/url pair, upload the parts in parallel
         let do_uploads = files_and_urls.map_ok(|(info, file, mut url)| async move {
             // spawn in new task for real parallelism, at least when using the multi-threaded runtime
             let parts = tokio::spawn(async move {
                 let mut parts = Vec::new();
 
                 loop {
-                    let part_number = info.part.fetch_add(1, Ordering::SeqCst);
+                    let part_number = info.part.fetch_add(1, Ordering::Relaxed);
 
                     if part_number as u64 >= num_parts {
                         break;
@@ -247,8 +249,6 @@ impl Client {
 
                     let start = part_number as u64 * recommended_part_size;
                     let end = (start + recommended_part_size).min(length);
-
-                    let content_length = end - start;
 
                     let sha1 = {
                         let mut file = file.try_lock().expect("Unable to lock file");
@@ -258,7 +258,7 @@ impl Client {
 
                     let part_info = NewPartInfo::builder()
                         .content_sha1(sha1)
-                        .content_length(content_length)
+                        .content_length(end - start)
                         .part_number(unsafe { NonZeroU32::new_unchecked(part_number + 1) })
                         .encryption(info.encryption.clone())
                         .build();

@@ -11,7 +11,7 @@ use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     IntoUrl, Method,
 };
-use std::{borrow::Cow, future::Future, num::NonZeroU32, sync::Arc};
+use std::{borrow::Cow, future::Future, num::NonZeroU32, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 
 pub mod error;
@@ -75,6 +75,7 @@ pub struct ClientBuilder {
     auth: HeaderValue,
     ua: Option<Cow<'static, str>>,
     max_retries: u8,
+    retry_delay: Duration,
 }
 
 impl ClientBuilder {
@@ -84,6 +85,7 @@ impl ClientBuilder {
             auth: models::create_auth_header(key_id, app_key),
             ua: None,
             max_retries: 5,
+            retry_delay: Duration::from_secs(1),
         }
     }
 
@@ -98,6 +100,12 @@ impl ClientBuilder {
     #[inline]
     pub fn max_retries(mut self, max_retries: u8) -> Self {
         self.max_retries = max_retries;
+        self
+    }
+
+    /// Sets the delay between authorization retries if a request fails.
+    pub fn retry_delay(mut self, delay: Duration) -> Self {
+        self.retry_delay = delay;
         self
     }
 
@@ -133,11 +141,7 @@ impl Client {
             return Err(B2Error::B2ErrorMessage(resp.json().await?));
         }
 
-        let text = resp.text().await?;
-
-        println!("TEXT: {text}");
-
-        Ok(serde_json::from_str(&text)?)
+        Ok(serde_json::from_str(&resp.text().await?)?)
     }
 
     async fn do_auth(client: &reqwest::Client, config: ClientBuilder) -> Result<ClientState, B2Error> {
@@ -166,7 +170,7 @@ impl Client {
                         return Err(B2Error::Unauthorized);
                     }
 
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    tokio::time::sleep(config.retry_delay).await;
 
                     continue 'try_auth;
                 }

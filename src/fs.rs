@@ -125,7 +125,7 @@ pub struct NewFileFromPath<'a> {
     ///
     /// If set to 0, the default number of connections will be used.
     ///
-    /// The default is currently a maximum of 8 connections,
+    /// The default is currently a maximum of 4 connections,
     /// depending on the number of available threads.
     #[builder(default, setter(into))]
     pub max_simultaneous_uploads: u8,
@@ -190,20 +190,20 @@ impl Client {
             return do_upload.await;
         }
 
-        let max_simultaneous_uploads = match info.max_simultaneous_uploads {
+        let num_parts = length.div_ceil(recommended_part_size);
+
+        let max_simultaneous_uploads = (num_parts as usize).min(match info.max_simultaneous_uploads {
             0 => match std::thread::available_parallelism() {
-                Ok(threads) => threads.get().min(8),
+                Ok(threads) => threads.get().min(4),
                 Err(_) => 1,
             },
             _ => info.max_simultaneous_uploads as usize,
-        };
+        });
 
         let whole_info =
             NewLargeFileInfo::builder().file_name(file_name).content_type(info.content_type.take()).build();
 
         let large = self.start_large_file(bucket_id, &whole_info).boxed().await?;
-
-        let num_parts = length.div_ceil(recommended_part_size);
 
         struct SharedInfo {
             large: LargeFileUpload,

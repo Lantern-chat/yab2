@@ -60,6 +60,12 @@ impl ClientState {
     fn url(&self, path: &str) -> String {
         format!("{}/b2api/v3/{}", self.account.api.storage.api_url, path)
     }
+
+    #[inline]
+    fn bucket_id<'a>(&'a self, bucket_id: Option<&'a str>) -> Result<&'a str, B2Error> {
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        bucket_id.or_else(|| self.account.api.storage.bucket_id.as_deref()).ok_or(B2Error::MissingBucketId)
+    }
 }
 
 /// A client for interacting with the B2 API
@@ -365,7 +371,7 @@ impl Client {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// let client = ClientBuilder::new(&app_id, &app_key).authorize().await?;
     ///
     /// let files = client.list_files(ListFiles::builder().all_versions(true).build()).await?;
@@ -384,13 +390,7 @@ impl Client {
 
             let mut args = ListFiles { ..args }; // redefine lifetime of `args`
 
-            if args.bucket_id.is_none() {
-                args.bucket_id = state.account.api.storage.bucket_id.as_deref();
-
-                if args.bucket_id.is_none() {
-                    return Err(B2Error::MissingBucketId);
-                }
-            }
+            args.bucket_id = Some(state.bucket_id(args.bucket_id)?);
 
             let path = if args.all_versions { "b2_list_file_versions" } else { "b2_list_file_names" };
 
@@ -426,11 +426,7 @@ impl Client {
             } else if query.bucket_id.is_some() {
                 query.file_id = None;
             } else {
-                query.bucket_id = state.account.api.storage.bucket_id.as_deref();
-
-                if query.bucket_id.is_none() {
-                    return Err(B2Error::MissingBucketId);
-                }
+                query.bucket_id = Some(state.bucket_id(query.bucket_id)?);
             }
 
             let path = state.url(if file_id.is_some() { "b2_get_upload_part_url" } else { "b2_get_upload_url" });
@@ -484,10 +480,6 @@ impl Client {
 
                 state.check_capability("writeFiles")?;
 
-                let Some(bucket_id) = bucket_id.or_else(|| state.account.api.storage.bucket_id.as_deref()) else {
-                    return Err(B2Error::MissingBucketId);
-                };
-
                 #[derive(Serialize)]
                 #[serde(rename_all = "camelCase")]
                 struct B2StartLargeFile<'a> {
@@ -496,12 +488,14 @@ impl Client {
                     content_type: Option<&'a str>,
                 }
 
+                let body = B2StartLargeFile {
+                    bucket_id: state.bucket_id(bucket_id)?,
+                    file_name: &info.file_name,
+                    content_type: info.content_type.as_deref(),
+                };
+
                 Client::json::<models::B2FileInfo>(
-                    b2.req(Method::POST, &state.auth, state.url("b2_start_large_file")).json(&B2StartLargeFile {
-                        bucket_id,
-                        file_name: &info.file_name,
-                        content_type: info.content_type.as_deref(),
-                    }),
+                    b2.req(Method::POST, &state.auth, state.url("b2_start_large_file")).json(&body),
                 )
                 .await
             })

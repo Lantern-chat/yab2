@@ -239,10 +239,16 @@ pub enum DownloadFileBy<'a> {
 
 /// Parameters for listing files in a bucket.
 ///
-/// Used in [`Client::list_file_names`] and [`Client::list_file_versions`].
-#[derive(Debug, Clone, Copy, Serialize, typed_builder::TypedBuilder)]
+/// Used in [`Client::list_files`].
+#[derive(Default, Debug, Clone, Copy, Serialize, typed_builder::TypedBuilder)]
 #[serde(rename_all = "camelCase")]
 pub struct ListFiles<'a> {
+    /// If `true`, list all versions of all files in the bucket.
+    /// If `false`, list only the most recent versions of each file.
+    #[serde(skip_serializing)]
+    #[builder(default)]
+    pub all_versions: bool,
+
     /// The ID of the bucket to list files in. If `None`, the client's default bucket will be used.
     #[builder(default, setter(into))]
     pub bucket_id: Option<&'a str>,
@@ -254,7 +260,7 @@ pub struct ListFiles<'a> {
 
     /// The first file ID to return. If `None`, the list will start at the beginning.
     ///
-    /// Only used in [`Client::list_file_versions`].
+    /// Only used if `all_versions` is `true`.
     #[builder(default, setter(into))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_file_id: Option<&'a str>,
@@ -277,12 +283,6 @@ pub struct ListFiles<'a> {
     #[builder(default, setter(into))]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delimiter: Option<&'a str>,
-}
-
-impl Default for ListFiles<'_> {
-    fn default() -> Self {
-        ListFiles::builder().build()
-    }
 }
 
 impl Client {
@@ -344,10 +344,13 @@ impl Client {
 
     /// Lists the names of all files in a bucket, optionally filtered by a prefix and/or delimiter.
     ///
-    /// If `bucket_id` is `None`, the client's default bucket will be used. If there is no default bucket,
+    /// If [`ListFile::bucket_id`] is `None`, the client's default bucket will be used. If there is no default bucket,
     /// an error will be returned.
     ///
-    /// NOTE: b2_list_file_names is a Class C transaction (see Pricing). The maximum number of
+    /// Each time you call, it returns a `nextFileName` and `nextFileId` (only if `all_versions` is true)
+    /// that can be used as the starting point for the next call.
+    ///
+    /// NOTE: b2_list_file_names/b2_list_file_versions are Class C transactions. The maximum number of
     /// files returned per transaction is 1000. If you set maxFileCount to more than 1000 and
     /// more than 1000 are returned, the call will be billed as multiple transactions, as if you
     /// had made requests in a loop asking for 1000 at a time. For example: if you set maxFileCount
@@ -355,8 +358,20 @@ impl Client {
     ///
     /// See the [B2 API documentation](https://www.backblaze.com/apidocs/b2-list-file-names) of this method
     /// for more information on how to use the parameters such as `prefix` and `delimiter`.
-    pub async fn list_file_names(&self, mut args: ListFiles<'_>) -> Result<models::B2FileInfoList, B2Error> {
-        args.start_file_id = None; // not used
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// let client = ClientBuilder::new(&app_id, &app_key).authorize().await?;
+    ///
+    /// let files = client.list_files(ListFiles::builder().all_versions(true).build()).await?;
+    ///
+    /// println!("{:#?}", files);
+    /// ```
+    pub async fn list_files(&self, mut args: ListFiles<'_>) -> Result<models::B2FileInfoList, B2Error> {
+        if !args.all_versions {
+            args.start_file_id = None; // not used
+        }
 
         self.run_request_with_reauth(move |b2| async move {
             let state = b2.state.read().await;
@@ -373,34 +388,9 @@ impl Client {
                 }
             }
 
-            Client::json(b2.req(Method::GET, &state.auth, state.url("b2_list_file_names")).query(&args)).await
-        })
-        .await
-    }
+            let path = if args.all_versions { "b2_list_file_versions" } else { "b2_list_file_names" };
 
-    /// Lists all of the versions of all of the files contained in a bucket,
-    /// optionally filtered by a prefix and/or delimiter.
-    ///
-    /// This call returns at most 1000 file names per transaction, but it can be
-    /// called repeatedly to scan through all of the file names in a bucket. Each time you call,
-    /// it returns a `nextFileName` and `nextFileId` that can be used as the starting point for the next call.
-    pub async fn list_file_versions(&self, args: ListFiles<'_>) -> Result<models::B2FileInfoList, B2Error> {
-        self.run_request_with_reauth(|b2| async move {
-            let state = b2.state.read().await;
-
-            state.check_capability("listFiles")?;
-
-            let mut args = ListFiles { ..args }; // redefine lifetime of `args`
-
-            if args.bucket_id.is_none() {
-                args.bucket_id = state.account.api.storage.bucket_id.as_deref();
-
-                if args.bucket_id.is_none() {
-                    return Err(B2Error::MissingBucketId);
-                }
-            }
-
-            Client::json(b2.req(Method::GET, &state.auth, state.url("b2_list_file_versions")).query(&args)).await
+            Client::json(b2.req(Method::GET, &state.auth, state.url(path)).query(&args)).await
         })
         .await
     }
@@ -1046,7 +1036,7 @@ mod tests {
 
         let client = ClientBuilder::new(&app_id, &app_key).authorize().await.unwrap();
 
-        let files = client.list_file_versions(ListFiles::default()).await.unwrap();
+        let files = client.list_files(ListFiles::builder().all_versions(false).build()).await.unwrap();
 
         println!("{:#?}", files);
     }

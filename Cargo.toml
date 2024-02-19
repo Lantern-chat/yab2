@@ -7,7 +7,7 @@ license = "GPL-3.0-only"
 
 [features]
 default = ["fs", "pool"]
-fs = ["tokio/fs", "tokio/macros", "hex", "sha1", "tokio-stream", "futures"]
+fs = ["tokio/fs", "tokio/macros", "hex", "sha1", "futures"]
 pool = ["parking_lot"]
 large_buffers = []
 
@@ -26,7 +26,6 @@ bytes = "1.5.0"
 parking_lot = { version = "0.12", optional = true }
 hex = { version = "0.4.3", optional = true }
 sha1 = { version = "0.10.6", optional = true }
-tokio-stream = { version = "0.1.14", optional = true, default-features = false }
 futures = { version = "0.3.30", optional = true }
 
 [dev-dependencies]

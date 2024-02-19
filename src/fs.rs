@@ -6,7 +6,7 @@ use std::{io::SeekFrom, path::Path, sync::Arc};
 use futures::FutureExt;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use futures::stream::{self, StreamExt, TryStreamExt};
 
@@ -50,56 +50,56 @@ async fn hash_chunk(file: &mut File, start: u64, end: u64) -> Result<String, B2E
     Ok(hex::encode(sha1.finalize()))
 }
 
-async fn forward_file_to_tx(
-    file: &mut File,
-    start: u64,
-    end: u64,
-    tx: mpsc::Sender<Result<Bytes, DynError>>,
-) -> Result<(), B2Error> {
-    file.seek(SeekFrom::Start(start)).await?;
-
-    let chunk_length = end - start;
-    let mut read = 0;
-
-    while read < chunk_length {
-        let remaining = (chunk_length - read).min(DEFAULT_BUF_SIZE as u64) as usize;
-
-        let mut buf = BytesMut::with_capacity(remaining);
-
-        // The buf won't resize unless these are equal, so stop it before then.
-        while buf.len() < buf.capacity() {
-            file.read_buf(&mut buf).await?;
-        }
-
-        assert_eq!(buf.len(), remaining);
-        assert_eq!(buf.len(), buf.capacity());
-
-        read += buf.len() as u64;
-
-        if let Err(_) = tx.send(Ok(buf.freeze())).await {
-            return Err(B2Error::Unknown);
-        }
-    }
-
-    Ok(())
-}
-
 fn generate_file_upload_callback(file: Arc<Mutex<File>>, start: u64, end: u64) -> impl Fn() -> Body {
     move || {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<_, DynError>>(1);
-        let body = Body::wrap_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+        let num_chunks = (end - start).div_ceil(DEFAULT_BUF_SIZE as u64) as usize;
 
-        let file = file.clone();
+        // Pretty much guaranteed to be able to lock the file, so just do it.
+        let file = Mutex::try_lock_owned(file.clone()).expect("Unable to lock file");
 
-        tokio::spawn(async move {
-            let mut file = file.try_lock().expect("Unable to lock file");
+        struct State {
+            file: OwnedMutexGuard<File>,
+            chunk: u64,
+        }
 
-            if let Err(e) = forward_file_to_tx(&mut file, start, end, tx.clone()).await {
-                _ = tx.send(Err(e.into())).await;
+        Body::wrap_stream(stream::unfold(State { file, chunk: 0 }, move |mut state| async move {
+            if state.chunk >= num_chunks as u64 {
+                return None;
             }
-        });
 
-        body
+            // avoid needing to deal with state in the error case
+            let read_chunk = async {
+                // only necessary on the first iteration
+                if state.chunk == 0 {
+                    state.file.seek(SeekFrom::Start(start)).await?;
+                }
+
+                let chunk_start = start + state.chunk * DEFAULT_BUF_SIZE as u64;
+                let chunk_end = (chunk_start + DEFAULT_BUF_SIZE as u64).min(end);
+
+                let remaining = (chunk_end - chunk_start) as usize;
+
+                let mut buf = BytesMut::with_capacity(remaining);
+
+                // The buf won't resize unless these are equal, so stop it before then.
+                while buf.len() < buf.capacity() {
+                    state.file.read_buf(&mut buf).await?;
+                }
+
+                assert_eq!(buf.len(), remaining);
+                assert_eq!(buf.len(), buf.capacity());
+
+                state.chunk += 1;
+
+                Ok::<Bytes, DynError>(buf.freeze())
+            };
+
+            // give state back to the stream with result
+            Some(match read_chunk.await {
+                Ok(chunk) => (Ok(chunk), state),
+                Err(e) => (Err(e), state),
+            })
+        }))
     }
 }
 

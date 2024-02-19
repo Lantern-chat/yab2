@@ -198,11 +198,22 @@ pub struct B2FileInfo {
     pub file_retention: B2FileRetention,
     pub legal_hold: B2LegalHold,
     pub replication_status: Option<B2ReplicationStatus>,
-
-    #[serde(default)]
     pub server_side_encryption: B2ServerSideEncryption,
-
     pub upload_timestamp: u64,
+}
+
+#[derive(Default, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2FileInfoList {
+    pub files: Vec<B2FileInfo>,
+
+    /// The name of the next file, if there are more files to list.
+    #[serde(default)]
+    pub next_file_name: Option<String>,
+
+    /// The ID of the next file, if there are more files to list.
+    #[serde(default)]
+    pub next_file_id: Option<String>,
 }
 
 /// Response from `b2_cancel_large_file`

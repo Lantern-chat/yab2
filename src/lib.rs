@@ -9,7 +9,7 @@ use futures::FutureExt;
 use headers::HeaderMapExt;
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
-    Client as ReqwestClient, Method, Response,
+    IntoUrl, Method,
 };
 use std::{borrow::Cow, future::Future, num::NonZeroU32, sync::Arc};
 use tokio::sync::RwLock;
@@ -23,11 +23,9 @@ pub mod pool;
 #[cfg(feature = "fs")]
 mod fs;
 
+pub use error::B2Error;
 pub use fs::NewFileFromPath;
 
-pub use error::B2Error;
-
-const PREFIX: &str = "b2api/v3";
 const AUTH_HEADER: HeaderName = HeaderName::from_static("authorization");
 
 macro_rules! h {
@@ -60,7 +58,7 @@ impl ClientState {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/{PREFIX}/{}", self.account.api.storage.api_url, path)
+        format!("{}/b2api/v3/{}", self.account.api.storage.api_url, path)
     }
 }
 
@@ -68,7 +66,7 @@ impl ClientState {
 #[derive(Clone)]
 pub struct Client {
     state: Arc<RwLock<ClientState>>,
-    client: ReqwestClient,
+    client: reqwest::Client,
 }
 
 /// A builder for creating a [`Client`]
@@ -121,41 +119,39 @@ impl ClientBuilder {
 }
 
 impl Client {
-    async fn try_json_error(resp: Response) -> Result<Response, B2Error> {
+    fn req(&self, method: Method, auth: &HeaderValue, url: impl IntoUrl) -> reqwest::RequestBuilder {
+        self.client.request(method, url).header(AUTH_HEADER, auth)
+    }
+
+    async fn json<T>(builder: reqwest::RequestBuilder) -> Result<T, B2Error>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let resp = builder.send().await?;
+
         if !resp.status().is_success() {
             return Err(B2Error::B2ErrorMessage(resp.json().await?));
         }
 
-        Ok(resp)
-    }
-
-    async fn json<T>(resp: reqwest::Response) -> Result<T, B2Error>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        let text = Self::try_json_error(resp).await?.text().await?;
+        let text = resp.text().await?;
 
         println!("TEXT: {text}");
 
         Ok(serde_json::from_str(&text)?)
     }
 
-    async fn do_auth(client: &ReqwestClient, config: ClientBuilder) -> Result<ClientState, B2Error> {
+    async fn do_auth(client: &reqwest::Client, config: ClientBuilder) -> Result<ClientState, B2Error> {
         use failsafe::{futures::CircuitBreaker, Config, Error as FailsafeError};
 
         let cb = Config::new().build();
         let mut attempts = 0;
 
         'try_auth: loop {
-            let do_auth_inner = async {
-                let resp = client
-                    .get(format!("https://api.backblazeb2.com/{PREFIX}/b2_authorize_account"))
-                    .header(AUTH_HEADER, &config.auth)
-                    .send()
-                    .await?;
-
-                Client::json::<models::B2Authorized>(resp).await
-            };
+            let do_auth_inner = Client::json::<models::B2Authorized>(
+                client
+                    .get("https://api.backblazeb2.com/b2api/v3/b2_authorize_account")
+                    .header(AUTH_HEADER, &config.auth),
+            );
 
             return match cb.call(do_auth_inner).await {
                 Ok(account) => Ok(ClientState {
@@ -208,10 +204,6 @@ impl Client {
         }
     }
 
-    fn inner_client(&self) -> &ReqwestClient {
-        &self.client
-    }
-
     /// Uses the `b2_get_file_info` API to get information about a file by its ID.
     pub async fn get_file_info(&self, file_id: &str) -> Result<models::B2FileInfo, B2Error> {
         #[derive(Serialize)]
@@ -225,15 +217,8 @@ impl Client {
 
             state.check_capability("readFiles")?; // TODO: check if this is the right capability
 
-            let resp = b2
-                .client
-                .request(Method::GET, "b2_get_file_info")
-                .header(AUTH_HEADER, &state.auth)
-                .query(&B2GetFileInfo { file_id })
-                .send()
-                .await?;
-
-            Client::json(resp).await
+            Client::json(b2.req(Method::GET, &state.auth, "b2_get_file_info").query(&B2GetFileInfo { file_id }))
+                .await
         })
         .await
     }
@@ -250,6 +235,54 @@ pub enum DownloadFileBy<'a> {
 
     /// Download a file by its file name.
     FileName(&'a str),
+}
+
+/// Parameters for listing files in a bucket.
+///
+/// Used in [`Client::list_file_names`] and [`Client::list_file_versions`].
+#[derive(Debug, Clone, Copy, Serialize, typed_builder::TypedBuilder)]
+#[serde(rename_all = "camelCase")]
+pub struct ListFiles<'a> {
+    /// The ID of the bucket to list files in. If `None`, the client's default bucket will be used.
+    #[builder(default, setter(into))]
+    pub bucket_id: Option<&'a str>,
+
+    /// The first file name to return. If `None`, the list will start at the beginning.
+    #[builder(default, setter(into))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_file_name: Option<&'a str>,
+
+    /// The first file ID to return. If `None`, the list will start at the beginning.
+    ///
+    /// Only used in [`Client::list_file_versions`].
+    #[builder(default, setter(into))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_file_id: Option<&'a str>,
+
+    /// The maximum number of files to return. If `None`, the maximum is 1000.
+    ///
+    /// If you set `max_file_count` to more than 1000 and more than 1000 are returned,
+    /// the call will be billed as multiple transactions,
+    /// as if you had made requests in a loop asking for 1000 at a time.
+    #[builder(default, setter(into))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_file_count: Option<usize>,
+
+    /// The prefix to filter files by. If `None`, no prefix will be used.
+    #[builder(default, setter(into))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<&'a str>,
+
+    /// The delimiter to use when filtering files. If `None`, no delimiter will be used.
+    #[builder(default, setter(into))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delimiter: Option<&'a str>,
+}
+
+impl Default for ListFiles<'_> {
+    fn default() -> Self {
+        ListFiles::builder().build()
+    }
 }
 
 impl Client {
@@ -281,14 +314,12 @@ impl Client {
             }
 
             let resp = b2
-                .client
-                .request(Method::GET, {
+                .req(Method::GET, &state.auth, {
                     state.url(match file {
                         DownloadFileBy::FileId(_) => "b2_download_file_by_id",
                         DownloadFileBy::FileName(_) => "b2_download_file_by_name",
                     })
                 })
-                .header(AUTH_HEADER, &state.auth)
                 .headers({
                     let mut headers = HeaderMap::new();
                     if let Some(ref range) = range {
@@ -307,6 +338,69 @@ impl Client {
                 info: models::B2FileHeaders::parse(resp.headers())?,
                 resp,
             })
+        })
+        .await
+    }
+
+    /// Lists the names of all files in a bucket, optionally filtered by a prefix and/or delimiter.
+    ///
+    /// If `bucket_id` is `None`, the client's default bucket will be used. If there is no default bucket,
+    /// an error will be returned.
+    ///
+    /// NOTE: b2_list_file_names is a Class C transaction (see Pricing). The maximum number of
+    /// files returned per transaction is 1000. If you set maxFileCount to more than 1000 and
+    /// more than 1000 are returned, the call will be billed as multiple transactions, as if you
+    /// had made requests in a loop asking for 1000 at a time. For example: if you set maxFileCount
+    /// to 10000 and 3123 items are returned, you will be billed for 4 Class C transactions.
+    ///
+    /// See the [B2 API documentation](https://www.backblaze.com/apidocs/b2-list-file-names) of this method
+    /// for more information on how to use the parameters such as `prefix` and `delimiter`.
+    pub async fn list_file_names(&self, mut args: ListFiles<'_>) -> Result<models::B2FileInfoList, B2Error> {
+        args.start_file_id = None; // not used
+
+        self.run_request_with_reauth(move |b2| async move {
+            let state = b2.state.read().await;
+
+            state.check_capability("listFiles")?;
+
+            let mut args = ListFiles { ..args }; // redefine lifetime of `args`
+
+            if args.bucket_id.is_none() {
+                args.bucket_id = state.account.api.storage.bucket_id.as_deref();
+
+                if args.bucket_id.is_none() {
+                    return Err(B2Error::MissingBucketId);
+                }
+            }
+
+            Client::json(b2.req(Method::GET, &state.auth, state.url("b2_list_file_names")).query(&args)).await
+        })
+        .await
+    }
+
+    /// Lists all of the versions of all of the files contained in a bucket,
+    /// optionally filtered by a prefix and/or delimiter.
+    ///
+    /// This call returns at most 1000 file names per transaction, but it can be
+    /// called repeatedly to scan through all of the file names in a bucket. Each time you call,
+    /// it returns a `nextFileName` and `nextFileId` that can be used as the starting point for the next call.
+    pub async fn list_file_versions(&self, args: ListFiles<'_>) -> Result<models::B2FileInfoList, B2Error> {
+        self.run_request_with_reauth(|b2| async move {
+            let state = b2.state.read().await;
+
+            state.check_capability("listFiles")?;
+
+            let mut args = ListFiles { ..args }; // redefine lifetime of `args`
+
+            if args.bucket_id.is_none() {
+                args.bucket_id = state.account.api.storage.bucket_id.as_deref();
+
+                if args.bucket_id.is_none() {
+                    return Err(B2Error::MissingBucketId);
+                }
+            }
+
+            Client::json(b2.req(Method::GET, &state.auth, state.url("b2_list_file_versions")).query(&args)).await
         })
         .await
     }
@@ -346,11 +440,8 @@ impl Client {
             }
 
             let path = state.url(if file_id.is_some() { "b2_get_upload_part_url" } else { "b2_get_upload_url" });
-            let builder = b2.client.request(Method::GET, path).header(AUTH_HEADER, &state.auth);
 
-            let resp = builder.query(&query).send().await?;
-
-            Self::json::<models::B2UploadUrl>(resp).await
+            Self::json::<models::B2UploadUrl>(b2.req(Method::GET, &state.auth, path).query(&query)).await
         })
         .await
     }
@@ -399,9 +490,9 @@ impl Client {
 
                 state.check_capability("writeFiles")?;
 
-                let bucket_id = bucket_id
-                    .or_else(|| state.account.api.storage.bucket_id.as_deref())
-                    .ok_or(B2Error::MissingBucketId)?;
+                let Some(bucket_id) = bucket_id.or_else(|| state.account.api.storage.bucket_id.as_deref()) else {
+                    return Err(B2Error::MissingBucketId);
+                };
 
                 #[derive(Serialize)]
                 #[serde(rename_all = "camelCase")]
@@ -411,19 +502,14 @@ impl Client {
                     content_type: Option<&'a str>,
                 }
 
-                let resp = b2
-                    .client
-                    .request(Method::POST, state.url("b2_start_large_file"))
-                    .header(AUTH_HEADER, &state.auth)
-                    .json(&B2StartLargeFile {
+                Client::json::<models::B2FileInfo>(
+                    b2.req(Method::POST, &state.auth, state.url("b2_start_large_file")).json(&B2StartLargeFile {
                         bucket_id,
                         file_name: &info.file_name,
                         content_type: info.content_type.as_deref(),
-                    })
-                    .send()
-                    .await?;
-
-                Client::json::<models::B2FileInfo>(resp).await
+                    }),
+                )
+                .await
             })
             .await?;
 
@@ -635,16 +721,7 @@ impl RawUploadUrl {
         T: serde::de::DeserializeOwned,
     {
         loop {
-            let res = async {
-                let builder = self
-                    .client
-                    .inner_client()
-                    .request(Method::POST, &self.url.upload_url)
-                    .header(AUTH_HEADER, &self.auth);
-
-                Client::json(f(builder).send().await?).await
-            };
-
+            let res = Client::json(f(self.client.req(Method::POST, &self.auth, &self.url.upload_url)));
             return match res.await {
                 Err(B2Error::B2ErrorMessage(e)) if e.status == 401 => {
                     let url = self
@@ -833,15 +910,8 @@ impl LargeFileUpload {
             .run_request_with_reauth(|b2| async move {
                 let state = b2.state.read().await;
 
-                let resp = b2
-                    .client
-                    .request(reqwest::Method::POST, state.url("b2_finish_large_file"))
-                    .header(AUTH_HEADER, &state.auth)
-                    .json(&body)
-                    .send()
-                    .await?;
-
-                Client::json(resp).await
+                Client::json(b2.req(Method::POST, &state.auth, state.url("b2_finish_large_file")).json(&body))
+                    .await
             })
             .await
     }
@@ -864,15 +934,8 @@ impl LargeFileUpload {
             .run_request_with_reauth(|b2| async move {
                 let state = b2.state.read().await;
 
-                let resp = b2
-                    .client
-                    .request(reqwest::Method::POST, state.url("b2_cancel_large_file"))
-                    .header(AUTH_HEADER, &state.auth)
-                    .json(&body)
-                    .send()
-                    .await?;
-
-                Client::json(resp).await
+                Client::json(b2.req(Method::POST, &state.auth, state.url("b2_cancel_large_file")).json(&body))
+                    .await
             })
             .await
     }
@@ -972,5 +1035,19 @@ mod tests {
         let file = client.upload_from_path(info, None, None).await.unwrap();
 
         println!("{:?}", file);
+    }
+
+    #[tokio::test]
+    async fn test_list_files() {
+        dotenv::dotenv().ok();
+
+        let app_id = std::env::var("APP_ID").expect("APP_ID not found in .env");
+        let app_key = std::env::var("APP_KEY").expect("APP_KEY not found in .env");
+
+        let client = ClientBuilder::new(&app_id, &app_key).authorize().await.unwrap();
+
+        let files = client.list_file_versions(ListFiles::default()).await.unwrap();
+
+        println!("{:#?}", files);
     }
 }

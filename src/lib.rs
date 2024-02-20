@@ -393,7 +393,7 @@ impl Client {
     /// Each time you call, it returns a `nextFileName` and `nextFileId` (only if `all_versions` is true)
     /// that can be used as the starting point for the next call.
     ///
-    /// NOTE: b2_list_file_names/b2_list_file_versions are Class C transactions. The maximum number of
+    /// NOTE: `b2_list_file_names`/`b2_list_file_versions` are Class C transactions. The maximum number of
     /// files returned per transaction is 1000. If you set maxFileCount to more than 1000 and
     /// more than 1000 are returned, the call will be billed as multiple transactions, as if you
     /// had made requests in a loop asking for 1000 at a time. For example: if you set maxFileCount
@@ -706,6 +706,21 @@ pub mod sse {
         pub key_md5: String,
     }
 
+    impl ServerSideEncryptionCustomer {
+        /// Creates a new `ServerSideEncryptionCustomer` with the given key,
+        /// automatically computing the MD5 digest and encoding.
+        pub fn aes256(key: &[u8]) -> Self {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            use md5::{Digest, Md5};
+
+            Self {
+                algorithm: "AES256".to_string(),
+                key: STANDARD.encode(key),
+                key_md5: STANDARD.encode(Md5::new().chain_update(key).finalize()),
+            }
+        }
+    }
+
     /// Server-Side Encryption (SSE) types
     #[derive(Debug, Clone, Serialize)]
     #[serde(untagged)]
@@ -719,6 +734,12 @@ pub mod sse {
 
         /// SSE-C encryption
         Customer(ServerSideEncryptionCustomer),
+    }
+
+    impl From<ServerSideEncryptionCustomer> for ServerSideEncryption {
+        fn from(sse_c: ServerSideEncryptionCustomer) -> Self {
+            ServerSideEncryption::Customer(sse_c)
+        }
     }
 
     impl ServerSideEncryptionCustomer {

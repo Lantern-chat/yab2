@@ -328,6 +328,159 @@ pub struct ListFiles<'a> {
     pub delimiter: Option<&'a str>,
 }
 
+/// Wrapper around a response and the file's parsed headers.
+pub struct DownloadedFile {
+    pub resp: reqwest::Response,
+    pub info: models::B2FileHeaders,
+}
+
+/// New file retention settings to apply to a file.
+///
+/// You can use [`FileRetention::builder`] or the other
+/// provided methods to create a new `FileRetention` instance.
+#[derive(Default, Debug, Clone, Serialize, typed_builder::TypedBuilder)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRetention {
+    /// The retention mode to use for the file.
+    #[builder(default, setter(into))]
+    pub mode: Option<models::B2FileRetentionMode>,
+
+    /// Point at which the file will be unlocked and can be deleted.
+    ///
+    /// In millieconds since the Unix epoch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retain_until_timestamp: Option<u64>,
+
+    /// Bypasses governance mode retention settings to set the new retention settings.
+    #[serde(skip_serializing)]
+    pub bypass_governance: bool,
+}
+
+impl FileRetention {
+    /// Creates a new `FileRetention` with the given retention mode.
+    pub const fn new(mode: Option<models::B2FileRetentionMode>) -> Self {
+        Self {
+            mode,
+            retain_until_timestamp: None,
+            bypass_governance: false,
+        }
+    }
+
+    /// Creates a new `FileRetention` with no retention settings.
+    pub const fn none() -> Self {
+        Self::new(None)
+    }
+
+    /// Creates a new `FileRetention` with [`Compliance`](models::B2FileRetentionMode::Compliance) retention settings.
+    pub const fn compliance() -> Self {
+        Self::new(Some(models::B2FileRetentionMode::Compliance))
+    }
+
+    /// Creates a new `FileRetention` with [`Governance`](models::B2FileRetentionMode::Governance) retention settings.
+    pub const fn governance() -> Self {
+        Self::new(Some(models::B2FileRetentionMode::Governance))
+    }
+
+    /// Bypasses governance mode retention settings to set the new retention settings.
+    pub const fn bypass_governance(mut self) -> Self {
+        self.bypass_governance = true;
+        self
+    }
+
+    /// Sets the point at which the file will be unlocked and can be deleted.
+    ///
+    /// In millieconds since the Unix epoch.
+    pub const fn retain_until_timestamp(mut self, timestamp: Option<u64>) -> Self {
+        self.retain_until_timestamp = timestamp;
+        self
+    }
+}
+
+/// Server-Side Encryption (SSE) types and utilities
+///
+/// This module provides types and utilities for working with server-side encryption (SSE) in the B2 API.
+///
+/// The B2 API supports two types of server-side encryption:
+/// - SSE-B2: encryption provided by Backblaze
+/// - SSE-C: encryption provided by the client
+///
+/// SSE-B2 is the default encryption type, and is used when no encryption type is specified.
+/// SSE-C is used when the client provides an encryption key and the necessary headers.
+///
+/// The types in this module are used to specify the encryption type and provide the necessary headers for SSE-C.
+pub mod sse {
+    use super::{HeaderMap, HeaderName, HeaderValue};
+
+    /// Server-Side Encryption (SSE) with a customer-provided key (SSE-C)
+    #[derive(Debug, Clone, Serialize)]
+    pub struct ServerSideEncryptionCustomer {
+        /// The algorithm to use when encrypting/decrypting a file using SSE-C encryption. The only currently supported value is AES256.
+        pub algorithm: String,
+
+        /// The base64-encoded AES256 encryption key when encrypting/decrypting a file using SSE-C encryption.
+        pub key: String,
+
+        /// The base64-encoded MD5 digest of the `X-Bz-Server-Side-Encryption-Customer-Key` when encrypting/decrypting a file using SSE-C encryption.
+        pub key_md5: String,
+    }
+
+    impl ServerSideEncryptionCustomer {
+        /// Creates a new `ServerSideEncryptionCustomer` with the given key,
+        /// automatically computing the MD5 digest and encoding.
+        pub fn aes256(key: &[u8]) -> Self {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            use md5::{Digest, Md5};
+
+            Self {
+                algorithm: "AES256".to_string(),
+                key: STANDARD.encode(key),
+                key_md5: STANDARD.encode(Md5::new().chain_update(key).finalize()),
+            }
+        }
+    }
+
+    /// Server-Side Encryption (SSE) types
+    #[derive(Debug, Clone, Serialize)]
+    #[serde(tag = "mode")]
+    pub enum ServerSideEncryption {
+        /// SSE-B2 encryption, the default encryption type.
+        #[serde(rename = "SSE-B2")]
+        Standard {
+            /// The algorithm to use when encrypting/decrypting a file using SSE-B2 encryption. The only currently supported value is AES256.
+            algorithm: String,
+        },
+
+        /// SSE-C encryption
+        #[serde(rename = "SSE-C")]
+        Customer(ServerSideEncryptionCustomer),
+    }
+
+    impl From<ServerSideEncryptionCustomer> for ServerSideEncryption {
+        fn from(sse_c: ServerSideEncryptionCustomer) -> Self {
+            ServerSideEncryption::Customer(sse_c)
+        }
+    }
+
+    impl ServerSideEncryptionCustomer {
+        pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
+            h!(headers."x-bz-server-side-encryption-customer-algorithm" => &self.algorithm);
+            h!(headers."x-bz-server-side-encryption-customer-key" => &self.key);
+            h!(headers."x-bz-server-side-encryption-customer-key-md5" => &self.key_md5);
+        }
+    }
+
+    impl ServerSideEncryption {
+        pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
+            match self {
+                ServerSideEncryption::Standard { algorithm } => {
+                    h!(headers."x-bz-server-side-encryption" => algorithm);
+                }
+                ServerSideEncryption::Customer(sse_c) => sse_c.add_headers(headers),
+            }
+        }
+    }
+}
+
 impl Client {
     /// Downloads a file by its ID or name, returning a [`DownloadedFile`],
     /// which is a wrapper around a [`reqwest::Response`] and the file's parsed headers.
@@ -555,6 +708,58 @@ impl Client {
         .await
     }
 
+    /// Modifies the Object Lock retention settings for an existing file.
+    ///
+    /// After enabling file retention for a file in an Object Lock-enabled bucket,
+    /// any attempts to delete the file or make any changes to it before
+    /// the end of the retention period will fail.
+    ///
+    /// File retention settings can be configured in either governance or
+    /// compliance mode. For files protected in governance mode, file retention
+    /// settings can be deleted or the retention period shortened only by clients
+    /// with the appropriate application key capability (i.e., bypassGovernance).
+    ///
+    /// File retention settings for files protected in compliance mode cannot
+    /// removed by any user, but their retention dates can be extended by
+    /// clients with appropriate application key capabilities.
+    pub async fn update_file_retention(
+        &self,
+        file_name: &str,
+        file_id: &str,
+        retention: FileRetention,
+    ) -> Result<(), B2Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct B2UpdateFileRetention<'a> {
+            file_name: &'a str,
+            file_id: &'a str,
+
+            #[serde(flatten)]
+            retention: FileRetention,
+
+            bypass_governance: bool,
+        }
+
+        let body = &B2UpdateFileRetention {
+            file_name,
+            file_id,
+            bypass_governance: retention.bypass_governance,
+            retention,
+        };
+
+        self.run_request_with_reauth(|b2| async move {
+            let state = b2.state.read().await;
+
+            state.check_capability("writeFileRetentions")?;
+            state.check_prefix(Some(file_name))?;
+
+            Self::json(b2.req(Method::POST, &state.auth, state.url("b2_update_file_retention")).json(body))
+                .await
+                .map(|_: DummyValue| ())
+        })
+        .await
+    }
+
     async fn get_b2_upload_url(
         &self,
         bucket_id: Option<&str>,
@@ -639,7 +844,17 @@ impl Client {
         struct B2StartLargeFile<'a> {
             bucket_id: &'a str,
             file_name: &'a str,
+
             content_type: Option<&'a str>,
+
+            #[serde(skip_serializing_if = "Option::is_none")]
+            file_retention: Option<&'a FileRetention>,
+
+            #[serde(skip_serializing_if = "Option::is_none")]
+            legal_hold: Option<&'a str>,
+
+            #[serde(skip_serializing_if = "Option::is_none")]
+            encryption: Option<&'a sse::ServerSideEncryption>,
         }
 
         let info = self
@@ -653,6 +868,9 @@ impl Client {
                     bucket_id: state.bucket_id(bucket_id)?,
                     file_name: &info.file_name,
                     content_type: info.content_type.as_deref(),
+                    file_retention: info.retention.as_ref(),
+                    legal_hold: info.legal_hold.map(|lh| if lh { "on" } else { "off" }),
+                    encryption: info.encryption.as_ref(),
                 };
 
                 Client::json::<models::B2FileInfo>(
@@ -666,99 +884,6 @@ impl Client {
             client: self.clone(),
             info,
         })
-    }
-}
-
-/// Wrapper around a response and the file's parsed headers.
-pub struct DownloadedFile {
-    pub resp: reqwest::Response,
-    pub info: models::B2FileHeaders,
-}
-
-/// Server-Side Encryption (SSE) types and utilities
-///
-/// This module provides types and utilities for working with server-side encryption (SSE) in the B2 API.
-///
-/// The B2 API supports two types of server-side encryption:
-/// - SSE-B2: encryption provided by Backblaze
-/// - SSE-C: encryption provided by the client
-///
-/// SSE-B2 is the default encryption type, and is used when no encryption type is specified.
-/// SSE-C is used when the client provides an encryption key and the necessary headers.
-///
-/// The types in this module are used to specify the encryption type and provide the necessary headers for SSE-C.
-pub mod sse {
-    use super::{HeaderMap, HeaderName, HeaderValue};
-
-    /// Server-Side Encryption (SSE) with a customer-provided key (SSE-C)
-    #[derive(Debug, Clone, Serialize)]
-    pub struct ServerSideEncryptionCustomer {
-        /// The algorithm to use when encrypting/decrypting a file using SSE-C encryption. The only currently supported value is AES256.
-        #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Algorithm")]
-        pub algorithm: String,
-
-        /// The base64-encoded AES256 encryption key when encrypting/decrypting a file using SSE-C encryption.
-        #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Key")]
-        pub key: String,
-
-        /// The base64-encoded MD5 digest of the `X-Bz-Server-Side-Encryption-Customer-Key` when encrypting/decrypting a file using SSE-C encryption.
-        #[serde(rename = "X-Bz-Server-Side-Encryption-Customer-Key-Md5")]
-        pub key_md5: String,
-    }
-
-    impl ServerSideEncryptionCustomer {
-        /// Creates a new `ServerSideEncryptionCustomer` with the given key,
-        /// automatically computing the MD5 digest and encoding.
-        pub fn aes256(key: &[u8]) -> Self {
-            use base64::{engine::general_purpose::STANDARD, Engine as _};
-            use md5::{Digest, Md5};
-
-            Self {
-                algorithm: "AES256".to_string(),
-                key: STANDARD.encode(key),
-                key_md5: STANDARD.encode(Md5::new().chain_update(key).finalize()),
-            }
-        }
-    }
-
-    /// Server-Side Encryption (SSE) types
-    #[derive(Debug, Clone, Serialize)]
-    #[serde(untagged)]
-    pub enum ServerSideEncryption {
-        /// SSE-B2 encryption, the default encryption type.
-        Standard {
-            /// The algorithm to use when encrypting/decrypting a file using SSE-B2 encryption. The only currently supported value is AES256.
-            #[serde(rename = "X-Bz-Server-Side-Encryption")]
-            algorithm: String,
-        },
-
-        /// SSE-C encryption
-        Customer(ServerSideEncryptionCustomer),
-    }
-
-    impl From<ServerSideEncryptionCustomer> for ServerSideEncryption {
-        fn from(sse_c: ServerSideEncryptionCustomer) -> Self {
-            ServerSideEncryption::Customer(sse_c)
-        }
-    }
-
-    impl ServerSideEncryptionCustomer {
-        pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
-            h!(headers."x-bz-server-side-encryption-customer-algorithm" => &self.algorithm);
-            h!(headers."x-bz-server-side-encryption-customer-key" => &self.key);
-            h!(headers."x-bz-server-side-encryption-customer-key-md5" => &self.key_md5);
-        }
-    }
-
-    impl ServerSideEncryption {
-        pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
-            match self {
-                ServerSideEncryption::Standard { algorithm } => {
-                    h!(headers."x-bz-server-side-encryption" => algorithm);
-                }
-                ServerSideEncryption::Customer(sse_c) => sse_c.add_headers(headers),
-            }
-        }
     }
 }
 
@@ -789,6 +914,14 @@ pub struct NewFileInfo {
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
     pub encryption: Option<sse::ServerSideEncryption>,
+
+    /// The file retention settings to apply to the file.
+    #[builder(default, setter(into))]
+    pub retention: Option<FileRetention>,
+
+    /// Whether to apply a legal hold to the file.
+    #[builder(default)]
+    pub legal_hold: Option<bool>,
 }
 
 /// Info about a new large file to be uploaded.
@@ -811,6 +944,18 @@ pub struct NewLargeFileInfo {
     /// determine the file's content type automatically.
     #[builder(default, setter(into))]
     pub content_type: Option<String>,
+
+    /// The server-side encryption to use when uploading the file.
+    #[builder(default)]
+    pub encryption: Option<sse::ServerSideEncryption>,
+
+    /// The file retention settings to apply to the file.
+    #[builder(default, setter(into))]
+    pub retention: Option<FileRetention>,
+
+    /// Whether to apply a legal hold to the file.
+    #[builder(default)]
+    pub legal_hold: Option<bool>,
 }
 
 /// Info about a new part of a large file to be uploaded.
@@ -840,6 +985,20 @@ impl NewFileInfo {
         h!(headers."content-type" => self.content_type.as_deref().unwrap_or("application/octet-stream"));
         h!(headers."content-length" => &self.content_length.to_string());
         h!(headers."x-bz-content-sha1" => &self.content_sha1);
+
+        if let Some(ref retention) = self.retention {
+            if let Some(ref mode) = retention.mode {
+                h!(headers."x-bz-file-retention-mode" => mode.as_ref());
+
+                if let Some(timestamp) = retention.retain_until_timestamp {
+                    h!(headers."x-bz-file-retention-retain-until-timestamp" => &timestamp.to_string());
+                }
+            }
+        }
+
+        if let Some(legal_hold) = self.legal_hold {
+            h!(headers."x-bz-file-legal-hold" => if legal_hold { "on" } else { "off" });
+        }
 
         if let Some(ref encryption) = self.encryption {
             encryption.add_headers(headers);

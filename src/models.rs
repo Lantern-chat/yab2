@@ -125,11 +125,20 @@ pub enum B2FileEncryptionHeaders {
     Customer { algorithm: Box<str>, key_md5: Box<str> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum B2FileRetentionMode {
     Governance,
     Compliance,
+}
+
+impl AsRef<str> for B2FileRetentionMode {
+    fn as_ref(&self) -> &str {
+        match self {
+            B2FileRetentionMode::Governance => "governance",
+            B2FileRetentionMode::Compliance => "compliance",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

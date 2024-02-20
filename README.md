@@ -47,7 +47,7 @@ Opinionated Backblaze B2 Client.
 - [x] `b2_start_large_file`
 - [ ] `b2_update_bucket`
 - [x] `b2_update_file_legal_hold`
-- [ ] `b2_update_file_retention`
+- [x] `b2_update_file_retention`
 - [x] `b2_upload_file`
 - [x] `b2_upload_part`
 

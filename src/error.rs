@@ -57,6 +57,9 @@ pub enum B2Error {
 
     #[error("Invalid File Id For Upload Url")]
     FileIdMismatch,
+
+    #[error("Invalid/Mismatched Prefix")]
+    InvalidPrefix,
 }
 
 #[derive(Debug, thiserror::Error)]

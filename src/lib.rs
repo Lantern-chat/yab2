@@ -5,14 +5,14 @@
 #[macro_use]
 extern crate serde;
 
-use futures::FutureExt;
-use headers::HeaderMapExt;
-use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
-    IntoUrl, Method,
-};
 use std::{borrow::Cow, future::Future, num::NonZeroU32, sync::Arc, time::Duration};
+
+use futures::FutureExt;
 use tokio::sync::RwLock;
+
+use headers::HeaderMapExt;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
+use reqwest::Method;
 
 pub mod error;
 pub mod models;
@@ -25,8 +25,6 @@ mod fs;
 
 pub use error::B2Error;
 pub use fs::NewFileFromPath;
-
-const AUTH_HEADER: HeaderName = HeaderName::from_static("authorization");
 
 macro_rules! h {
     ($headers:ident.$key:literal => $value:expr) => {
@@ -65,6 +63,13 @@ impl ClientState {
     fn bucket_id<'a>(&'a self, bucket_id: Option<&'a str>) -> Result<&'a str, B2Error> {
         #[allow(clippy::unnecessary_lazy_evaluations)]
         bucket_id.or_else(|| self.account.api.storage.bucket_id.as_deref()).ok_or(B2Error::MissingBucketId)
+    }
+
+    fn check_prefix(&self, name: Option<&str>) -> Result<(), B2Error> {
+        match (name, self.account.api.storage.name_prefix.as_ref()) {
+            (Some(name), Some(prefix)) if !name.starts_with(prefix as &str) => Err(B2Error::InvalidPrefix),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -144,8 +149,8 @@ impl<'de> serde::Deserialize<'de> for DummyValue {
 }
 
 impl Client {
-    fn req(&self, method: Method, auth: &HeaderValue, url: impl IntoUrl) -> reqwest::RequestBuilder {
-        self.client.request(method, url).header(AUTH_HEADER, auth)
+    fn req(&self, method: Method, auth: &HeaderValue, url: impl AsRef<str>) -> reqwest::RequestBuilder {
+        self.client.request(method, url.as_ref()).header(AUTHORIZATION, auth)
     }
 
     async fn json<T>(builder: reqwest::RequestBuilder) -> Result<T, B2Error>
@@ -171,7 +176,7 @@ impl Client {
             let do_auth_inner = Client::json::<models::B2Authorized>(
                 client
                     .get("https://api.backblazeb2.com/b2api/v3/b2_authorize_account")
-                    .header(AUTH_HEADER, &config.auth),
+                    .header(AUTHORIZATION, &config.auth),
             );
 
             return match cb.call(do_auth_inner).await {
@@ -424,7 +429,6 @@ impl Client {
         struct B2HideFile<'a> {
             #[serde(skip_serializing_if = "Option::is_none")]
             bucket_id: Option<&'a str>,
-
             file_name: &'a str,
         }
 
@@ -432,6 +436,7 @@ impl Client {
             let state = b2.state.read().await;
 
             state.check_capability("writeFiles")?;
+            state.check_prefix(Some(file_name))?;
 
             let body = B2HideFile {
                 bucket_id: state.bucket_id(bucket_id).ok(),
@@ -472,6 +477,7 @@ impl Client {
             let state = b2.state.read().await;
 
             state.check_capability("deleteFiles")?;
+            state.check_prefix(Some(file_name))?;
 
             if bypass_governance {
                 // TODO: check if this is the right capability
@@ -519,6 +525,7 @@ impl Client {
             let state = b2.state.read().await;
 
             state.check_capability("writeFileLegalHolds")?;
+            state.check_prefix(Some(file_name))?;
 
             let body = B2UpdateLegalHold {
                 file_name,
@@ -537,7 +544,7 @@ impl Client {
         &self,
         bucket_id: Option<&str>,
         file_id: Option<&str>,
-    ) -> Result<models::B2UploadUrl, B2Error> {
+    ) -> Result<(Option<Arc<str>>, models::B2UploadUrl), B2Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct B2GetUploadUrlQuery<'a> {
@@ -565,7 +572,10 @@ impl Client {
 
             let path = state.url(if file_id.is_some() { "b2_get_upload_part_url" } else { "b2_get_upload_url" });
 
-            Self::json::<models::B2UploadUrl>(b2.req(Method::GET, &state.auth, path).query(&query)).await
+            Ok((
+                state.account.api.storage.name_prefix.clone(),
+                Self::json::<models::B2UploadUrl>(b2.req(Method::GET, &state.auth, path).query(&query)).await?,
+            ))
         })
         .await
     }
@@ -575,12 +585,13 @@ impl Client {
         bucket_id: Option<&str>,
         file_id: Option<&str>,
     ) -> Result<RawUploadUrl, B2Error> {
-        let url = self.get_b2_upload_url(bucket_id, file_id).await?;
+        let (prefix, url) = self.get_b2_upload_url(bucket_id, file_id).await?;
 
         Ok(RawUploadUrl {
             client: self.clone(),
             auth: url.header(),
             url,
+            prefix,
         })
     }
 
@@ -621,6 +632,7 @@ impl Client {
                 let state = b2.state.read().await;
 
                 state.check_capability("writeFiles")?;
+                state.check_prefix(Some(&info.file_name))?;
 
                 let body = B2StartLargeFile {
                     bucket_id: state.bucket_id(bucket_id)?,
@@ -815,6 +827,7 @@ struct RawUploadUrl {
     client: Client,
     url: models::B2UploadUrl,
     auth: HeaderValue,
+    prefix: Option<Arc<str>>,
 }
 
 /// Temporarily acquired URL for uploading single files.
@@ -846,7 +859,7 @@ impl RawUploadUrl {
             let res = Client::json(f(self.client.req(Method::POST, &self.auth, &self.url.upload_url)));
             return match res.await {
                 Err(B2Error::B2ErrorMessage(e)) if e.status == 401 => {
-                    let url = self
+                    let (prefix, url) = self
                         .client
                         .get_b2_upload_url(self.url.bucket_id.as_deref(), self.url.file_id.as_deref())
                         .boxed()
@@ -854,6 +867,7 @@ impl RawUploadUrl {
 
                     self.auth = url.header();
                     self.url = url;
+                    self.prefix = prefix;
 
                     continue;
                 }
@@ -862,11 +876,20 @@ impl RawUploadUrl {
         }
     }
 
-    pub async fn upload_file<F, B>(&mut self, info: &NewFileInfo, file: F) -> Result<models::B2FileInfo, B2Error>
+    fn check_prefix(&self, file_name: &str) -> Result<(), B2Error> {
+        match self.prefix {
+            Some(ref prefix) if !file_name.starts_with(prefix.as_ref()) => Err(B2Error::InvalidPrefix),
+            _ => Ok(()),
+        }
+    }
+
+    async fn upload_file<F, B>(&mut self, info: &NewFileInfo, file: F) -> Result<models::B2FileInfo, B2Error>
     where
         F: Fn() -> B,
         B: Into<reqwest::Body>,
     {
+        self.check_prefix(&info.file_name)?;
+
         self.do_upload(|builder| {
             builder.body(file()).headers({
                 let mut headers = HeaderMap::new();
@@ -877,7 +900,7 @@ impl RawUploadUrl {
         .await
     }
 
-    pub async fn upload_part<F, B>(&mut self, info: &NewPartInfo, body: F) -> Result<models::B2PartInfo, B2Error>
+    async fn upload_part<F, B>(&mut self, info: &NewPartInfo, body: F) -> Result<models::B2PartInfo, B2Error>
     where
         F: Fn() -> B,
         B: Into<reqwest::Body>,
@@ -973,7 +996,7 @@ impl LargeFileUpload {
         F: Fn() -> B,
         B: Into<reqwest::Body>,
     {
-        if url.0.url.file_id.as_deref() != Some(self.info.file_id.as_str()) {
+        if url.0.url.file_id.as_deref() != Some(self.info.file_id.as_ref()) {
             return Err(B2Error::FileIdMismatch);
         }
 

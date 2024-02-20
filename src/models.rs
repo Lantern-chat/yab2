@@ -1,7 +1,9 @@
 //! Models for the B2 API.
+//!
+//! These types are largely read-only.
 
 use reqwest::header::{HeaderMap, HeaderValue};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 /// Creates the authorization header and token
 ///
@@ -17,14 +19,14 @@ pub fn create_auth_header(key_id: &str, key: &str) -> HeaderValue {
 pub struct B2Authorized {
     /// The identifier for the account.
     #[serde(alias = "accountId")]
-    pub account_id: String,
+    pub account_id: Box<str>,
 
     /// An authorization token to use with all calls, other than b2_authorize_account,
     /// that need an `authorization` header.
     ///
     /// **This authorization token is valid for at most 24 hours.**
     #[serde(alias = "authorizationToken")]
-    pub auth_token: String,
+    pub auth_token: Box<str>,
 
     #[serde(alias = "apiInfo")]
     pub api: B2ApiInfo,
@@ -42,30 +44,30 @@ pub struct B2ApiInfo {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct B2StorageApi {
-    pub api_url: String,
-    pub download_url: String,
+    pub api_url: Box<str>,
+    pub download_url: Box<str>,
     pub recommended_part_size: u64,
     pub absolute_minimum_part_size: u64,
-    pub s3_api_url: String,
+    pub s3_api_url: Box<str>,
 
     /// A list of strings, each one naming a capability the key has. Possibilities are:
     /// `listKeys`, `writeKeys`, `deleteKeys`, `listBuckets`, `writeBuckets`,
     /// `deleteBuckets`, `listFiles`, `readFiles`, `shareFiles`, `writeFiles`, and `deleteFiles`.
     #[serde(default)]
-    pub capabilities: Vec<String>,
+    pub capabilities: Vec<Box<str>>,
 
     /// When present, access is restricted to one bucket.
-    pub bucket_id: Option<String>,
+    pub bucket_id: Option<Box<str>>,
 
     /// When `bucketId`` is set, and it is a valid bucket that has not been deleted,
     /// this field is set to the name of the bucket.
     ///
     /// It's possible that bucketId is set to a bucket that no longer exists,
     /// in which case this field will be null. It's also null when `bucketId`` is null.
-    pub bucket_name: Option<String>,
+    pub bucket_name: Option<Box<str>>,
 
-    /// When present, access is restricted to files whose names start with the prefix
-    pub name_prefix: Option<String>,
+    /// When present, access is restricted to files whose names start with the prefix.
+    pub name_prefix: Option<Arc<str>>,
 }
 
 impl B2StorageApi {
@@ -94,19 +96,21 @@ impl B2Authorized {
 #[serde(rename_all = "camelCase")]
 pub struct B2UploadUrl {
     /// The identifier for the bucket, if doing a simple upload.
-    pub bucket_id: Option<String>,
+    #[serde(default)]
+    pub bucket_id: Option<Box<str>>,
 
     /// The identifier for the file, if doing a large file upload.
-    pub file_id: Option<String>,
+    #[serde(default)]
+    pub file_id: Option<Box<str>>,
 
     /// The URL that can be used to upload files to this bucket, see b2_upload_file.
-    pub upload_url: String,
+    pub upload_url: Box<str>,
 
     /// The authorization token that must be used when uploading files to this bucket.
     ///
     /// This token is valid for 24 hours or until the uploadUrl endpoint rejects an upload,
     /// see b2_upload_file
-    pub authorization_token: String,
+    pub authorization_token: Box<str>,
 }
 
 impl B2UploadUrl {
@@ -117,8 +121,8 @@ impl B2UploadUrl {
 
 #[derive(Debug)]
 pub enum B2FileEncryptionHeaders {
-    B2 { algorithm: String },
-    Customer { algorithm: String, key_md5: String },
+    B2 { algorithm: Box<str> },
+    Customer { algorithm: Box<str>, key_md5: Box<str> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -155,7 +159,7 @@ pub struct B2LegalHold {
     pub is_client_authorized_to_read: bool,
 
     #[serde(default)]
-    pub value: Option<String>,
+    pub value: Option<Box<str>>,
 }
 
 #[derive(Default, Debug, Deserialize)]
@@ -177,24 +181,24 @@ pub struct B2FileRetentionValue {
 #[derive(Default, Debug, Deserialize)]
 pub struct B2ServerSideEncryption {
     #[serde(default)]
-    pub algorithm: Option<String>,
+    pub algorithm: Option<Box<str>>,
 
     #[serde(default)]
-    pub mode: Option<String>,
+    pub mode: Option<Box<str>>,
 }
 
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct B2FileInfo {
-    pub account_id: Option<String>,
-    pub file_id: String,
-    pub file_name: String,
+    pub account_id: Option<Box<str>>,
+    pub file_id: Box<str>,
+    pub file_name: Box<str>,
     pub action: Option<B2FileAction>,
-    pub bucket_id: String,
+    pub bucket_id: Box<str>,
     pub content_length: u64,
-    pub content_sha1: Option<String>,
-    pub content_type: Option<String>,
-    pub file_info: HashMap<String, String>,
+    pub content_sha1: Option<Box<str>>,
+    pub content_type: Option<Box<str>>,
+    pub file_info: HashMap<Box<str>, Box<str>>,
     pub file_retention: B2FileRetention,
     pub legal_hold: B2LegalHold,
     pub replication_status: Option<B2ReplicationStatus>,
@@ -209,30 +213,30 @@ pub struct B2FileInfoList {
 
     /// The name of the next file, if there are more files to list.
     #[serde(default)]
-    pub next_file_name: Option<String>,
+    pub next_file_name: Option<Box<str>>,
 
     /// The ID of the next file, if there are more files to list.
     #[serde(default)]
-    pub next_file_id: Option<String>,
+    pub next_file_id: Option<Box<str>>,
 }
 
 /// Response from `b2_cancel_large_file`
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct B2CancelledFileInfo {
-    pub file_id: String,
-    pub file_name: String,
-    pub bucket_id: String,
-    pub account_id: String,
+    pub file_id: Box<str>,
+    pub file_name: Box<str>,
+    pub bucket_id: Box<str>,
+    pub account_id: Box<str>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct B2PartInfo {
-    pub file_id: String,
+    pub file_id: Box<str>,
     pub part_number: u64,
     pub content_length: u64,
-    pub content_sha1: String,
+    pub content_sha1: Box<str>,
 
     #[serde(default)]
     pub server_side_encryption: B2ServerSideEncryption,
@@ -245,14 +249,14 @@ use headers::{CacheControl, ContentDisposition, ContentLength, ContentType, Expi
 pub struct B2FileHeaders {
     pub content_length: ContentLength,
     pub content_type: ContentType,
-    pub file_id: String,
-    pub file_name: String,
-    pub file_sha1: String,
+    pub file_id: Box<str>,
+    pub file_name: Box<str>,
+    pub file_sha1: Box<str>,
     pub info: HeaderMap,
     pub upload_timestamp: u64,
 
     pub content_disposition: Option<ContentDisposition>,
-    pub content_language: Option<String>,
+    pub content_language: Option<Box<str>>,
     pub expires: Option<Expires>,
     pub cache_control: Option<CacheControl>,
     pub encryption: Option<B2FileEncryptionHeaders>,
@@ -260,7 +264,7 @@ pub struct B2FileHeaders {
     pub retention_mode: Option<B2FileRetentionMode>,
     pub retain_until: Option<u64>,
     pub legal_hold: Option<bool>,
-    pub unauthorized_to_read: Option<String>,
+    pub unauthorized_to_read: Option<Box<str>>,
 }
 
 use crate::error::B2FileHeaderError;
@@ -271,8 +275,8 @@ impl B2FileHeaders {
             [@$key:literal] => { headers.typed_get().ok_or(B2FileHeaderError::MissingHeader($key))? };
             [$key:literal] => { headers.get($key).ok_or(B2FileHeaderError::MissingHeader($key))? };
             [$key:literal as str] => { h![$key].to_str()? };
-            [$key:literal as String] => { h![$key].to_str()?.to_owned() };
-            [$key:literal as Option<String>] => { headers.get($key).map(|h| h.to_str().map(|s| s.to_owned())).transpose()? };
+            [$key:literal as Box<str>] => { Box::from(h![$key].to_str()?) };
+            [$key:literal as Option<Box<str>>] => { headers.get($key).map(|h| h.to_str().map(Box::from)).transpose()? };
         }
 
         let mut info = HeaderMap::new();
@@ -285,22 +289,22 @@ impl B2FileHeaders {
         Ok(B2FileHeaders {
             content_length: h![@"content-length"],
             content_type: h![@"content-type"],
-            file_id: h!["x-bz-file-id" as String],
-            file_name: h!["x-bz-file-name" as String],
-            file_sha1: h!["x-bz-content-sha1" as String],
+            file_id: h!["x-bz-file-id" as Box<str>],
+            file_name: h!["x-bz-file-name" as Box<str>],
+            file_sha1: h!["x-bz-content-sha1" as Box<str>],
             info,
             upload_timestamp: h!["x-bz-upload-timestamp" as str].parse()?,
             content_disposition: headers.typed_get(),
-            content_language: h!["content-language" as Option<String>],
+            content_language: h!["content-language" as Option<Box<str>>],
             expires: headers.typed_get(),
             cache_control: headers.typed_get(),
 
-            encryption: match h!["x-bz-server-side-encryption" as Option<String>] {
+            encryption: match h!["x-bz-server-side-encryption" as Option<Box<str>>] {
                 Some(algorithm) => Some(B2FileEncryptionHeaders::B2 { algorithm }),
-                None => match h!["x-bz-server-side-encryption-customer-algorithm" as Option<String>] {
+                None => match h!["x-bz-server-side-encryption-customer-algorithm" as Option<Box<str>>] {
                     Some(algorithm) => Some(B2FileEncryptionHeaders::Customer {
                         algorithm,
-                        key_md5: h!["x-bz-server-side-encryption-customer-key-md5" as String],
+                        key_md5: h!["x-bz-server-side-encryption-customer-key-md5" as Box<str>],
                     }),
                     None => None,
                 },
@@ -330,7 +334,7 @@ impl B2FileHeaders {
                     }),
                 }
             },
-            unauthorized_to_read: h!["x-bz-client-unauthorized-to-read" as Option<String>],
+            unauthorized_to_read: h!["x-bz-client-unauthorized-to-read" as Option<Box<str>>],
         })
     }
 }

@@ -1,21 +1,31 @@
 [package]
-name = "b2"
+name = "yab2"
+description = "Yet Another Backblaze B2 Client"
+authors = ["novacrazy <novacrazy@gmail.com>"]
 version = "0.1.0"
 edition = "2021"
-repository = "https://github.com/Lantern-chat/b2"
-license = "GPL-3.0-only"
+
+include = ["src/**/*", "LICENSE-*", "README.md"]
+repository = "https://github.com/Lantern-chat/yab2"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+documentation = "https://docs.rs/iso8601-timestamp"
+keywords = ["backblaze", "b2", "cloud", "storage"]
+
+categories = ["web-programming", "api-bindings"]
 
 [features]
-default = ["fs", "pool"]
-fs = ["tokio/fs", "tokio/macros", "hex", "sha1", "futures"]
-pool = ["parking_lot"]
-large_buffers = []
+default = ["fs", "pool", "reqwest_compression"]
+fs = ["tokio/fs", "tokio/macros", "hex", "sha1", "futures"] # Enables uploading files from the filesystem
+pool = ["parking_lot"]                                      # Enables the `Pool` type for reusing upload URLs
+large_buffers = []                                          # Enable large buffer support, 64KiB instead of 8KiB
+reqwest_compression = ["reqwest/gzip", "reqwest/deflate"]   # Enable common compression support for reqwest
 
 [dependencies]
 base64 = "0.21.7"
 tokio = { version = "1", features = ["io-util", "sync"] }
-reqwest = { version = "0.11", features = ["json", "gzip", "deflate", "stream"] }
-serde = { version = "1", features = ["derive"] }
+reqwest = { version = "0.11", features = ["stream", "json"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "1.0.57"
 headers = "0.3"

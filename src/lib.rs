@@ -132,6 +132,17 @@ impl ClientBuilder {
     }
 }
 
+struct DummyValue;
+
+impl<'de> serde::Deserialize<'de> for DummyValue {
+    fn deserialize<D>(_: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(DummyValue)
+    }
+}
+
 impl Client {
     fn req(&self, method: Method, auth: &HeaderValue, url: impl IntoUrl) -> reqwest::RequestBuilder {
         self.client.request(method, url).header(AUTH_HEADER, auth)
@@ -310,18 +321,18 @@ impl Client {
     ) -> Result<DownloadedFile, B2Error> {
         let (range, encryption) = (&range, &encryption);
 
+        // serde_urlencoded doesn't support top-level enums,
+        // so we need to use a wrapper struct
+        #[derive(Serialize)]
+        struct DownloadFileBy2<'a> {
+            #[serde(flatten)]
+            file: DownloadFileBy<'a>,
+        }
+
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
             state.check_capability("readFiles")?;
-
-            // serde_urlencoded doesn't support top-level enums,
-            // so we need to use a wrapper struct
-            #[derive(Serialize)]
-            struct DownloadFileBy2<'a> {
-                #[serde(flatten)]
-                file: DownloadFileBy<'a>,
-            }
 
             let resp = b2
                 .req(Method::GET, &state.auth, {
@@ -395,6 +406,127 @@ impl Client {
             let path = if args.all_versions { "b2_list_file_versions" } else { "b2_list_file_names" };
 
             Client::json(b2.req(Method::GET, &state.auth, state.url(path)).query(&args)).await
+        })
+        .await
+    }
+
+    /// Hides a file so that downloading by name will not find the file,
+    /// but previous versions of the file are still stored.
+    pub async fn hide_file(
+        &self,
+        bucket_id: Option<&str>,
+        file_name: &str,
+    ) -> Result<models::B2FileInfo, B2Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct B2HideFile<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            bucket_id: Option<&'a str>,
+
+            file_name: &'a str,
+        }
+
+        self.run_request_with_reauth(|b2| async move {
+            let state = b2.state.read().await;
+
+            state.check_capability("writeFiles")?;
+
+            let body = B2HideFile {
+                bucket_id: state.bucket_id(bucket_id).ok(),
+                file_name,
+            };
+
+            Self::json(b2.req(Method::POST, &state.auth, state.url("b2_hide_file")).json(&body)).await
+        })
+        .await
+    }
+
+    /// Deletes one version of a file.
+    ///
+    /// If the version you delete is the latest version, and there are older versions,
+    /// then the most recent older version will become the current version,
+    /// and be the one that you'll get when downloading by name.
+    ///
+    /// When used on an unfinished large file, this call has the same effect as cancelling it.
+    ///
+    /// `bypass_governance` must be set to true if deleting a file version protected by Object Lock
+    /// governance mode retention settings. Setting the value requires the
+    /// `bypassGovernance` application key capability.
+    pub async fn delete_file(
+        &self,
+        file_id: &str,
+        file_name: &str,
+        bypass_governance: bool,
+    ) -> Result<(), B2Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct B2DeleteFile<'a> {
+            file_id: &'a str,
+            file_name: &'a str,
+            bypass_governance: bool,
+        }
+
+        self.run_request_with_reauth(|b2| async move {
+            let state = b2.state.read().await;
+
+            state.check_capability("deleteFiles")?;
+
+            if bypass_governance {
+                // TODO: check if this is the right capability
+                state.check_capability("bypassGovernance")?;
+            }
+
+            let body = B2DeleteFile {
+                file_id,
+                file_name,
+                bypass_governance,
+            };
+
+            Self::json(b2.req(Method::POST, &state.auth, state.url("b2_delete_file_version")).json(&body))
+                .await
+                .map(|_: DummyValue| ())
+        })
+        .await
+    }
+
+    /// Modifies the Object Lock legal hold status for an existing file.
+    ///
+    /// Used to enable legal hold for a file in an Object Lock-enabled bucket,
+    /// preventing it from being deleted, or to disable legal hold protections for a file.
+    ///
+    /// Backblaze B2 Cloud Storage Object Lock lets you make data immutable by preventing
+    /// a file from being changed or deleted until a given date to protect data that is
+    /// stored in Backblaze B2 from threats like ransomware or for regulatory compliance.
+    ///
+    /// `legal_hold` must be set to `true` to enable legal hold, and `false` to disable it.
+    pub async fn update_legal_hold(
+        &self,
+        file_name: &str,
+        file_id: &str,
+        legal_hold: bool,
+    ) -> Result<(), B2Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct B2UpdateLegalHold<'a> {
+            file_name: &'a str,
+            file_id: &'a str,
+            legal_hold: &'a str,
+        }
+
+        self.run_request_with_reauth(|b2| async move {
+            let state = b2.state.read().await;
+
+            state.check_capability("writeFileLegalHolds")?;
+
+            let body = B2UpdateLegalHold {
+                file_name,
+                file_id,
+                legal_hold: if legal_hold { "on" } else { "off" },
+            };
+
+            Self::json(b2.req(Method::POST, &state.auth, state.url("b2_update_legal_hold")).json(&body))
+                .await
+                .map(|_: DummyValue| ())
         })
         .await
     }
@@ -474,19 +606,19 @@ impl Client {
         bucket_id: Option<&str>,
         info: &NewLargeFileInfo,
     ) -> Result<LargeFileUpload, B2Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct B2StartLargeFile<'a> {
+            bucket_id: &'a str,
+            file_name: &'a str,
+            content_type: Option<&'a str>,
+        }
+
         let info = self
             .run_request_with_reauth(|b2| async move {
                 let state = b2.state.read().await;
 
                 state.check_capability("writeFiles")?;
-
-                #[derive(Serialize)]
-                #[serde(rename_all = "camelCase")]
-                struct B2StartLargeFile<'a> {
-                    bucket_id: &'a str,
-                    file_name: &'a str,
-                    content_type: Option<&'a str>,
-                }
 
                 let body = B2StartLargeFile {
                     bucket_id: state.bucket_id(bucket_id)?,

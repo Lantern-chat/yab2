@@ -5,7 +5,6 @@ Yet Another Backblaze B2 Client
 [![Documentation](https://docs.rs/yab2/badge.svg)](https://docs.rs/yab2)
 [![MIT/Apache-2 licensed](https://img.shields.io/crates/l/yab2.svg)](./LICENSE-Apache)
 
-
 Opinionated Backblaze B2 Client.
 
 ## Features
@@ -18,3 +17,4 @@ Opinionated Backblaze B2 Client.
 - `fs` (enables optimized routine for uploading from filesystem)
 - `pool` (enabled non-large `UploadURL` object pool for reuse)
 - `reqwest_compression` (enables deflate/gzip features on `reqwest`)
+- `large_buffers` (enables large buffer support, 64KiB instead of 8KiB)

@@ -1,4 +1,19 @@
-//! A client for the Backblaze B2 Cloud Storage API.
+//! Yet Another Backblaze B2 Client
+//! ===============================
+//!
+//! Opinionated Backblaze B2 Client.
+//!
+//! ## Features
+//!
+//! - Simple API making use of Rust's ownership for API constraints
+//! - Automatic re-authentication and refreshing of Upload URLs
+//!
+//! ## Cargo Features
+//!
+//! - `fs` (enables optimized routine for uploading from filesystem)
+//! - `pool` (enabled non-large `UploadURL` object pool for reuse)
+//! - `reqwest_compression` (enables deflate/gzip features on `reqwest`)
+//! - `large_buffers` (enables large buffer support, 64KiB instead of 8KiB)
 
 #![allow(clippy::redundant_pattern_matching)]
 

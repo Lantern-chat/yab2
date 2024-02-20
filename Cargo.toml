@@ -9,7 +9,7 @@ include = ["src/**/*", "LICENSE-*", "README.md"]
 repository = "https://github.com/Lantern-chat/yab2"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-documentation = "https://docs.rs/iso8601-timestamp"
+documentation = "https://docs.rs/yab2"
 keywords = ["backblaze", "b2", "cloud", "storage"]
 
 categories = ["web-programming", "api-bindings"]

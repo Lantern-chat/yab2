@@ -22,7 +22,6 @@ extern crate serde;
 
 use std::{borrow::Cow, future::Future, num::NonZeroU32, sync::Arc, time::Duration};
 
-use futures::FutureExt;
 use tokio::sync::RwLock;
 
 use headers::HeaderMapExt;
@@ -235,7 +234,7 @@ impl Client {
                 Ok(t) => Ok(t),
                 Err(B2Error::B2ErrorMessage(e)) if !retried && e.status == 401 => {
                     // box future to avoid stack bloat
-                    self.reauthorize().boxed().await?;
+                    Box::pin(self.reauthorize()).await?;
 
                     retried = true;
                     continue;
@@ -1077,11 +1076,10 @@ impl RawUploadUrl {
             let res = Client::json(f(self.client.req(Method::POST, &self.auth, &self.url.upload_url)));
             return match res.await {
                 Err(B2Error::B2ErrorMessage(e)) if e.status == 401 => {
-                    let (prefix, url) = self
-                        .client
-                        .get_b2_upload_url(self.url.bucket_id.as_deref(), self.url.file_id.as_deref())
-                        .boxed()
-                        .await?;
+                    let get_new_url =
+                        self.client.get_b2_upload_url(self.url.bucket_id.as_deref(), self.url.file_id.as_deref());
+
+                    let (prefix, url) = Box::pin(get_new_url).await?;
 
                     self.auth = url.header();
                     self.url = url;

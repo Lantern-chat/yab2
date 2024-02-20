@@ -16,10 +16,10 @@ categories = ["web-programming", "api-bindings"]
 
 [features]
 default = ["fs", "pool", "reqwest_compression"]
-fs = ["tokio/fs", "tokio/macros", "hex", "sha1", "futures"] # Enables uploading files from the filesystem
-pool = ["parking_lot"]                                      # Enables the `Pool` type for reusing upload URLs
-large_buffers = []                                          # Enable large buffer support, 64KiB instead of 8KiB
-reqwest_compression = ["reqwest/gzip", "reqwest/deflate"]   # Enable common compression support for reqwest
+fs = ["tokio/fs", "tokio/macros", "hex", "sha1", "futures-util"] # Enables uploading files from the filesystem
+pool = ["parking_lot"]                                           # Enables the `Pool` type for reusing upload URLs
+large_buffers = []                                               # Enable large buffer support, 64KiB instead of 8KiB
+reqwest_compression = ["reqwest/gzip", "reqwest/deflate"]        # Enable common compression support for reqwest
 
 [dependencies]
 base64 = "0.21.7"
@@ -37,7 +37,7 @@ bytes = "1.5.0"
 parking_lot = { version = "0.12", optional = true }
 hex = { version = "0.4.3", optional = true }
 sha1 = { version = "0.10.6", optional = true }
-futures = { version = "0.3.30", optional = true }
+futures-util = { version = "0.3", optional = true }
 
 [dev-dependencies]
 dotenv = "0.15.0"

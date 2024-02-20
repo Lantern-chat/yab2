@@ -3,12 +3,12 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{io::SeekFrom, path::Path, sync::Arc};
 
-use futures::FutureExt;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures_util::stream::{self, StreamExt, TryStreamExt};
+use futures_util::FutureExt;
 
 use bytes::{Bytes, BytesMut};
 use reqwest::Body;

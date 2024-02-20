@@ -255,6 +255,8 @@ pub enum DownloadFileBy<'a> {
     FileId(&'a str),
 
     /// Download a file by its file name.
+    ///
+    /// If a file has multiple versions, the most recent version will be downloaded.
     FileName(&'a str),
 }
 
@@ -365,7 +367,7 @@ impl Client {
 
     /// Lists the names of all files in a bucket, optionally filtered by a prefix and/or delimiter.
     ///
-    /// If [`ListFile::bucket_id`] is `None`, the client's default bucket will be used. If there is no default bucket,
+    /// If [`ListFiles::bucket_id`] is `None`, the client's default bucket will be used. If there is no default bucket,
     /// an error will be returned.
     ///
     /// Each time you call, it returns a `nextFileName` and `nextFileId` (only if `all_versions` is true)

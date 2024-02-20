@@ -279,7 +279,7 @@ pub struct B2FileHeaders {
 use crate::error::B2FileHeaderError;
 
 impl B2FileHeaders {
-    pub fn parse(headers: &HeaderMap) -> Result<B2FileHeaders, B2FileHeaderError> {
+    pub(crate) fn parse(headers: &HeaderMap) -> Result<B2FileHeaders, B2FileHeaderError> {
         #[rustfmt::skip] macro_rules! h {
             [@$key:literal] => { headers.typed_get().ok_or(B2FileHeaderError::MissingHeader($key))? };
             [$key:literal] => { headers.get($key).ok_or(B2FileHeaderError::MissingHeader($key))? };

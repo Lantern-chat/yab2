@@ -409,18 +409,22 @@ impl FileRetention {
 ///
 /// The types in this module are used to specify the encryption type and provide the necessary headers for SSE-C.
 pub mod sse {
+    use std::borrow::Cow;
+
     use super::{HeaderMap, HeaderName, HeaderValue};
 
     /// Server-Side Encryption (SSE) with a customer-provided key (SSE-C)
     #[derive(Debug, Clone, Serialize)]
     pub struct ServerSideEncryptionCustomer {
-        /// The algorithm to use when encrypting/decrypting a file using SSE-C encryption. The only currently supported value is AES256.
-        pub algorithm: String,
+        /// The algorithm to use when encrypting/decrypting a file using SSE-C encryption.
+        ///
+        /// The only currently supported value is `"AES256"`.
+        pub algorithm: Cow<'static, str>,
 
         /// The base64-encoded AES256 encryption key when encrypting/decrypting a file using SSE-C encryption.
         pub key: String,
 
-        /// The base64-encoded MD5 digest of the `X-Bz-Server-Side-Encryption-Customer-Key` when encrypting/decrypting a file using SSE-C encryption.
+        /// The base64-encoded MD5 digest of the [`key`](ServerSideEncryptionCustomer::key) when encrypting/decrypting a file using SSE-C encryption.
         pub key_md5: String,
     }
 
@@ -432,7 +436,7 @@ pub mod sse {
             use md5::{Digest, Md5};
 
             Self {
-                algorithm: "AES256".to_string(),
+                algorithm: Cow::Borrowed("AES256"),
                 key: STANDARD.encode(key),
                 key_md5: STANDARD.encode(Md5::new().chain_update(key).finalize()),
             }
@@ -446,13 +450,32 @@ pub mod sse {
         /// SSE-B2 encryption, the default encryption type.
         #[serde(rename = "SSE-B2")]
         Standard {
-            /// The algorithm to use when encrypting/decrypting a file using SSE-B2 encryption. The only currently supported value is AES256.
-            algorithm: String,
+            /// The algorithm to use when encrypting/decrypting a file using SSE-B2 encryption.
+            ///
+            /// The only currently supported value is `"AES256"`, which can be
+            /// easily constructed using [`ServerSideEncryption::standard_aes256`].
+            algorithm: Cow<'static, str>,
         },
 
-        /// SSE-C encryption
+        /// SSE-C encryption, allowing the client to provide an encryption key.
+        ///
+        /// This variant can be easily constructed using [`ServerSideEncryption::customer_aes256`].
         #[serde(rename = "SSE-C")]
         Customer(ServerSideEncryptionCustomer),
+    }
+
+    impl ServerSideEncryption {
+        /// Creates a new `ServerSideEncryption` with the default SSE-B2 encryption algorithm of AES256.
+        pub fn standard_aes256() -> Self {
+            Self::Standard {
+                algorithm: Cow::Borrowed("AES256"),
+            }
+        }
+
+        /// Creates a new `ServerSideEncryption` with the given SSE-C encryption key for the AES256 algorithm.
+        pub fn customer_aes256(key: &[u8]) -> Self {
+            Self::Customer(ServerSideEncryptionCustomer::aes256(key))
+        }
     }
 
     impl From<ServerSideEncryptionCustomer> for ServerSideEncryption {

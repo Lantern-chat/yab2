@@ -994,9 +994,15 @@ mod tests {
             .content_sha1(hex::encode(Sha1::new().chain_update(&bytes).finalize()))
             .build();
 
-        upload.upload_file_bytes(&info, bytes).await.unwrap();
+        let file_info = upload.upload_file_bytes(&info, bytes).await.unwrap();
 
         println!("{:#?}", client.state.read().await.account);
+
+        let resp = client.download_file(DownloadFileBy::FileId(&file_info.file_id), None, None).await.unwrap();
+
+        let text = resp.resp.text().await.unwrap();
+
+        println!("OUTPUT: {text}");
     }
 
     #[tokio::test]
@@ -1009,7 +1015,7 @@ mod tests {
         let client = ClientBuilder::new(&app_id, &app_key).authorize().await.unwrap();
 
         let info = NewFileFromPath::builder()
-            .path(r#"testing.webm"#.as_ref())
+            .path(r#"./testing.webm"#.as_ref())
             .content_type("video/webm".to_owned())
             .file_name("testing.webm".to_owned())
             .build();

@@ -443,9 +443,15 @@ pub mod sse {
     }
 
     /// Server-Side Encryption (SSE) types
-    #[derive(Debug, Clone, Serialize)]
+    ///
+    /// Implements various `From` conversions for easy construction from other types.
+    #[derive(Default, Debug, Clone, Serialize)]
     #[serde(tag = "mode")]
     pub enum ServerSideEncryption {
+        /// The default encryption type of the bucket, which will either be SSE-B2 or no encryption.
+        #[default]
+        Default,
+
         /// SSE-B2 encryption, the default encryption type.
         #[serde(rename = "SSE-B2")]
         Standard {
@@ -464,8 +470,14 @@ pub mod sse {
     }
 
     impl ServerSideEncryption {
+        /// Creates a new `ServerSideEncryption` using the default encryption type of the bucket,
+        /// which will either be SSE-B2 or no encryption.
+        pub const fn default() -> Self {
+            Self::Default
+        }
+
         /// Creates a new `ServerSideEncryption` with the default SSE-B2 encryption algorithm of AES256.
-        pub fn standard_aes256() -> Self {
+        pub const fn standard_aes256() -> Self {
             Self::Standard {
                 algorithm: Cow::Borrowed("AES256"),
             }
@@ -475,11 +487,44 @@ pub mod sse {
         pub fn customer_aes256(key: &[u8]) -> Self {
             Self::Customer(ServerSideEncryptionCustomer::aes256(key))
         }
+
+        /// Returns `true` if the encryption type is `Default`.
+        pub const fn is_default(&self) -> bool {
+            matches!(self, Self::Default)
+        }
+
+        /// Returns `true` if the encryption type is `Standard`.
+        pub const fn is_standard(&self) -> bool {
+            matches!(self, Self::Standard { .. })
+        }
+
+        /// Returns `true` if the encryption type is `Customer`.
+        pub const fn is_customer(&self) -> bool {
+            matches!(self, Self::Customer { .. })
+        }
     }
 
     impl From<ServerSideEncryptionCustomer> for ServerSideEncryption {
         fn from(sse_c: ServerSideEncryptionCustomer) -> Self {
             ServerSideEncryption::Customer(sse_c)
+        }
+    }
+
+    impl From<Option<ServerSideEncryptionCustomer>> for ServerSideEncryption {
+        fn from(sse_c: Option<ServerSideEncryptionCustomer>) -> Self {
+            sse_c.map_or(ServerSideEncryption::Default, ServerSideEncryption::Customer)
+        }
+    }
+
+    impl From<Option<ServerSideEncryption>> for ServerSideEncryption {
+        fn from(sse: Option<ServerSideEncryption>) -> Self {
+            sse.unwrap_or(ServerSideEncryption::Default)
+        }
+    }
+
+    impl From<()> for ServerSideEncryption {
+        fn from(_: ()) -> Self {
+            ServerSideEncryption::Default
         }
     }
 
@@ -494,6 +539,7 @@ pub mod sse {
     impl ServerSideEncryption {
         pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
             match self {
+                ServerSideEncryption::Default => {}
                 ServerSideEncryption::Standard { algorithm } => {
                     h!(headers."x-bz-server-side-encryption" => algorithm);
                 }
@@ -875,8 +921,8 @@ impl Client {
             #[serde(skip_serializing_if = "Option::is_none")]
             legal_hold: Option<&'a str>,
 
-            #[serde(skip_serializing_if = "Option::is_none")]
-            encryption: Option<&'a sse::ServerSideEncryption>,
+            #[serde(skip_serializing_if = "sse::ServerSideEncryption::is_default")]
+            encryption: &'a sse::ServerSideEncryption,
         }
 
         let info = self
@@ -892,7 +938,7 @@ impl Client {
                     content_type: info.content_type.as_deref(),
                     file_retention: info.retention.as_ref(),
                     legal_hold: info.legal_hold.map(|lh| if lh { "on" } else { "off" }),
-                    encryption: info.encryption.as_ref(),
+                    encryption: &info.encryption,
                 };
 
                 Client::json::<models::B2FileInfo>(
@@ -934,8 +980,8 @@ pub struct NewFileInfo {
     pub content_sha1: String,
 
     /// The server-side encryption to use when uploading the file.
-    #[builder(default)]
-    pub encryption: Option<sse::ServerSideEncryption>,
+    #[builder(default, setter(into))]
+    pub encryption: sse::ServerSideEncryption,
 
     /// The file retention settings to apply to the file.
     #[builder(default, setter(into))]
@@ -968,8 +1014,8 @@ pub struct NewLargeFileInfo {
     pub content_type: Option<String>,
 
     /// The server-side encryption to use when uploading the file.
-    #[builder(default)]
-    pub encryption: Option<sse::ServerSideEncryption>,
+    #[builder(default, setter(into))]
+    pub encryption: sse::ServerSideEncryption,
 
     /// The file retention settings to apply to the file.
     #[builder(default, setter(into))]
@@ -997,8 +1043,8 @@ pub struct NewPartInfo {
     pub content_sha1: String,
 
     /// The server-side encryption to use when uploading the file.
-    #[builder(default)]
-    pub encryption: Option<sse::ServerSideEncryption>,
+    #[builder(default, setter(into))]
+    pub encryption: sse::ServerSideEncryption,
 }
 
 impl NewFileInfo {
@@ -1022,9 +1068,7 @@ impl NewFileInfo {
             h!(headers."x-bz-file-legal-hold" => if legal_hold { "on" } else { "off" });
         }
 
-        if let Some(ref encryption) = self.encryption {
-            encryption.add_headers(headers);
-        }
+        self.encryption.add_headers(headers);
     }
 }
 
@@ -1034,9 +1078,7 @@ impl NewPartInfo {
         h!(headers."content-length" => &self.content_length.to_string());
         h!(headers."x-bz-content-sha1" => &self.content_sha1);
 
-        if let Some(ref encryption) = self.encryption {
-            encryption.add_headers(headers);
-        }
+        self.encryption.add_headers(headers);
     }
 }
 
@@ -1322,6 +1364,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_auth() {
+        use sha1::{Digest, Sha1};
+
         dotenv::dotenv().ok();
 
         let app_id = std::env::var("APP_ID").expect("APP_ID not found in .env");
@@ -1344,13 +1388,7 @@ mod tests {
             .file_name("testing/Cargo.toml".to_owned())
             .content_length(meta.len())
             .content_type("text/plain".to_owned())
-            .content_sha1(hex::encode({
-                use sha1::{Digest, Sha1};
-
-                let mut hasher = Sha1::new();
-                hasher.update(&bytes);
-                hasher.finalize()
-            }))
+            .content_sha1(hex::encode(Sha1::new().chain_update(&bytes).finalize()))
             .build();
 
         upload.upload_file_bytes(&info, bytes).await.unwrap();

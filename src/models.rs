@@ -280,11 +280,11 @@ use crate::error::B2FileHeaderError;
 
 impl B2FileHeaders {
     pub(crate) fn parse(headers: &HeaderMap) -> Result<B2FileHeaders, B2FileHeaderError> {
-        #[rustfmt::skip] macro_rules! h {
+        #[rustfmt::skip] macro_rules! p {
             [@$key:literal] => { headers.typed_get().ok_or(B2FileHeaderError::MissingHeader($key))? };
             [$key:literal] => { headers.get($key).ok_or(B2FileHeaderError::MissingHeader($key))? };
-            [$key:literal as str] => { h![$key].to_str()? };
-            [$key:literal as Box<str>] => { Box::from(h![$key].to_str()?) };
+            [$key:literal as str] => { p![$key].to_str()? };
+            [$key:literal as Box<str>] => { Box::from(p![$key].to_str()?) };
             [$key:literal as Option<Box<str>>] => { headers.get($key).map(|h| h.to_str().map(Box::from)).transpose()? };
         }
 
@@ -296,24 +296,24 @@ impl B2FileHeaders {
         }
 
         Ok(B2FileHeaders {
-            content_length: h![@"content-length"],
-            content_type: h![@"content-type"],
-            file_id: h!["x-bz-file-id" as Box<str>],
-            file_name: h!["x-bz-file-name" as Box<str>],
-            file_sha1: h!["x-bz-content-sha1" as Box<str>],
+            content_length: p![@"content-length"],
+            content_type: p![@"content-type"],
+            file_id: p!["x-bz-file-id" as Box<str>],
+            file_name: p!["x-bz-file-name" as Box<str>],
+            file_sha1: p!["x-bz-content-sha1" as Box<str>],
             info,
-            upload_timestamp: h!["x-bz-upload-timestamp" as str].parse()?,
+            upload_timestamp: p!["x-bz-upload-timestamp" as str].parse()?,
             content_disposition: headers.typed_get(),
-            content_language: h!["content-language" as Option<Box<str>>],
+            content_language: p!["content-language" as Option<Box<str>>],
             expires: headers.typed_get(),
             cache_control: headers.typed_get(),
 
-            encryption: match h!["x-bz-server-side-encryption" as Option<Box<str>>] {
+            encryption: match p!["x-bz-server-side-encryption" as Option<Box<str>>] {
                 Some(algorithm) => Some(B2FileEncryptionHeaders::B2 { algorithm }),
-                None => match h!["x-bz-server-side-encryption-customer-algorithm" as Option<Box<str>>] {
+                None => match p!["x-bz-server-side-encryption-customer-algorithm" as Option<Box<str>>] {
                     Some(algorithm) => Some(B2FileEncryptionHeaders::Customer {
                         algorithm,
-                        key_md5: h!["x-bz-server-side-encryption-customer-key-md5" as Box<str>],
+                        key_md5: p!["x-bz-server-side-encryption-customer-key-md5" as Box<str>],
                     }),
                     None => None,
                 },
@@ -343,7 +343,7 @@ impl B2FileHeaders {
                     }),
                 }
             },
-            unauthorized_to_read: h!["x-bz-client-unauthorized-to-read" as Option<Box<str>>],
+            unauthorized_to_read: p!["x-bz-client-unauthorized-to-read" as Option<Box<str>>],
         })
     }
 }

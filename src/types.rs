@@ -4,7 +4,7 @@ use crate::models;
 
 /// Identifier for a file to download, either by its file ID or file name.
 ///
-/// Used in [`Client::download_file`].
+/// Used in [`Client::download_file`](crate::Client::download_file).
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum DownloadFileBy<'a> {
@@ -17,9 +17,55 @@ pub enum DownloadFileBy<'a> {
     FileName(&'a str),
 }
 
+/// Parameters for listing B2 Buckets.
+///
+/// When using an authorization token that is restricted to a bucket,
+/// you must include the `bucket_id` or `bucket_name` of that bucket in
+/// the request, or the request will be denied.
+///
+/// Used in [`Client::list_buckets`](crate::Client::list_buckets).
+#[derive(Default, Debug, Clone, typed_builder::TypedBuilder)]
+#[builder(doc, mutators(
+    /// Add a bucket type to the filter.
+    pub fn bucket_type(&mut self, bucket_type: models::B2BucketType) {
+        if !self.bucket_types.contains(&bucket_type) {
+            self.bucket_types.push(bucket_type);
+        }
+    }
+
+    /// Add multiple bucket types to the filter.
+    pub fn bucket_types(&mut self, bucket_types: impl IntoIterator<Item = models::B2BucketType>) {
+        for bucket_type in bucket_types {
+            if !self.bucket_types.contains(&bucket_type) {
+                self.bucket_types.push(bucket_type);
+            }
+        }
+    }
+))]
+pub struct ListBuckets<'a> {
+    /// When a bucket id is specified, the result will be a list containing just this bucket,
+    /// if it's present in the account, or no buckets if the account does not have a bucket with this ID.
+    #[builder(default, setter(into))]
+    pub bucket_id: Option<&'a str>,
+
+    /// When a bucket name is specified, the result will be a list containing just this bucket,
+    /// if it's present in the account, or no buckets if the account does not have a bucket with this name.
+    #[builder(default, setter(into))]
+    pub bucket_name: Option<&'a str>,
+
+    /// If present, B2 will use it as a filter for bucket types returned in the list buckets response.
+    ///
+    /// If not present, only buckets with bucket types [`allPublic`](models::B2BucketType::AllPublic),
+    /// [`allPrivate`](models::B2BucketType::AllPrivate) and
+    /// [`snapshot`](models::B2BucketType::Snapshot) will be returned.
+    /// A special filter value of [`All`](models::B2BucketType::All) will return all bucket types.
+    #[builder(default, via_mutators)]
+    pub bucket_types: arrayvec::ArrayVec<models::B2BucketType, 6>, // 6 is the number of variants in B2BucketType
+}
+
 /// Parameters for listing files in a bucket.
 ///
-/// Used in [`Client::list_files`].
+/// Used in [`Client::list_files`](crate::Client::list_files).
 #[derive(Default, Debug, Clone, Copy, Serialize, typed_builder::TypedBuilder)]
 #[serde(rename_all = "camelCase")]
 #[builder(doc)]

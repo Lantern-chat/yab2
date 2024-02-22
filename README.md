@@ -38,7 +38,7 @@ Opinionated Backblaze B2 Client.
 - [x] `b2_get_upload_part_url`
 - [x] `b2_get_upload_url`
 - [x] `b2_hide_file`
-- [ ] `b2_list_buckets`
+- [x] `b2_list_buckets`
 - [x] `b2_list_file_names`
 - [x] `b2_list_file_versions`
 - [ ] `b2_list_keys`

@@ -84,6 +84,133 @@ impl B2Authorized {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum B2BucketType {
+    All,
+    AllPublic,
+    AllPrivate,
+    Restricted,
+    Shared,
+    Snapshot,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2Bucket {
+    /// The account that the bucket is in.
+    pub account_id: Box<str>,
+
+    /// The unique ID of the bucket.
+    pub bucket_id: Box<str>,
+
+    /// The unique name of the bucket
+    pub bucket_name: Box<str>,
+    pub bucket_type: B2BucketType,
+
+    /// A counter that is updated every time the bucket is modified,
+    /// and can be used with the `ifRevisionIs` parameter to
+    /// `b2_update_bucket` to prevent colliding, simultaneous updates.
+    pub revision: u64,
+
+    #[serde(default)]
+    pub bucket_info: HashMap<Box<str>, Box<str>>,
+
+    #[serde(default)]
+    pub cors_rules: Vec<B2CorsRule>,
+
+    #[serde(default)]
+    pub lifecycle_rules: Vec<B2LifecycleRule>,
+
+    /// When present and set to s3, the bucket can be accessed through the S3 Compatible API.
+    #[serde(default)]
+    pub options: Vec<Box<str>>,
+
+    #[serde(default)]
+    pub replication_configuration: Option<B2ReplicationConfiguration>,
+    pub default_server_side_encryption: B2ServerSideEncryption,
+    pub file_lock_configuration: B2FileLockConfiguration,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2FileLockConfiguration {
+    pub is_client_authorized_to_read: bool,
+    #[serde(default)]
+    pub value: Option<B2FileLockConfigurationValue>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2FileLockConfigurationValue {
+    pub default_retention: B2FileRetention,
+    pub is_file_lock_enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2DefaultServerSideEncryption {
+    pub is_client_authorized_to_read: bool,
+    #[serde(default)]
+    pub value: Option<B2ServerSideEncryption>,
+}
+
+/// See [CORS Rules](https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules) for more information.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2CorsRule {
+    pub cors_rule_name: Box<str>,
+
+    #[serde(default)]
+    pub allowed_origins: Vec<Box<str>>,
+    #[serde(default)]
+    pub allowed_operations: Vec<Box<str>>,
+    #[serde(default)]
+    pub allowed_headers: Vec<Box<str>>,
+    #[serde(default)]
+    pub expose_headers: Vec<Box<str>>,
+    #[serde(default)]
+    pub max_age_seconds: u64,
+}
+
+#[derive(Default, Debug, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct B2ReplicationConfiguration {
+    pub as_replication_source: Option<B2ReplicationSourceArray>,
+    pub as_replication_destination: Option<B2ReplicationDestination>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2ReplicationSourceArray {
+    pub replication_rules: Vec<B2ReplicationSource>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2ReplicationSource {
+    pub destination_bucket_id: Box<str>,
+    pub file_name_prefix: Box<str>,
+    pub include_existing_files: bool,
+    pub is_enabled: bool,
+    pub priority: u64,
+    pub replication_rule_name: Box<str>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2ReplicationDestination {
+    pub source_to_destination_key_mapping: Box<str>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2LifecycleRule {
+    pub days_from_hiding_to_deleting: u64,
+    pub days_from_uploading_to_hiding: u64,
+    pub file_name_prefix: Box<str>,
+}
+
 /// When you upload a file to B2, you must call `b2_get_upload_url` first to get the URL for uploading.
 /// Then, you use `b2_upload_file` on this URL to upload your file.
 ///

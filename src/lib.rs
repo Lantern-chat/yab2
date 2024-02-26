@@ -192,11 +192,6 @@ impl<'de> serde::Deserialize<'de> for DummyValue {
     }
 }
 
-impl From<DummyValue> for () {
-    #[inline(always)]
-    fn from(_: DummyValue) -> Self {}
-}
-
 impl Client {
     fn req(&self, method: Method, auth: &HeaderValue, url: impl AsRef<str>) -> reqwest::RequestBuilder {
         self.client.request(method, url.as_ref()).header(AUTHORIZATION, auth)
@@ -387,13 +382,13 @@ impl Client {
 
             state.check_capability(B2Capability::DeleteKeys)?;
 
-            Self::json::<DummyValue>(b2.req(Method::POST, &state.auth, state.url("b2_delete_key")).json(
-                &B2DeleteKey {
+            Self::json(
+                b2.req(Method::POST, &state.auth, state.url("b2_delete_key")).json(&B2DeleteKey {
                     application_key_id: key_id,
-                },
-            ))
+                }),
+            )
             .await
-            .map(Into::into)
+            .map(|_: DummyValue| ())
         })
         .await
     }

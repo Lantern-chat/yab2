@@ -115,11 +115,11 @@ pub struct NewFileFromPath<'a> {
     /// If not provided, the file name will be the same as the file
     /// name on the local file system.
     #[builder(default, setter(into))]
-    pub file_name: Option<String>,
+    pub file_name: Option<&'a str>,
 
     /// The MIME type of the file.
     #[builder(default, setter(into))]
-    pub content_type: Option<String>,
+    pub content_type: Option<&'a str>,
 
     /// The maximum number of connections to use when uploading the file.
     ///
@@ -142,7 +142,7 @@ impl Client {
     /// Otherwise it will be uploaded as a single file, making use of the existing URL if provided.
     pub async fn upload_from_path(
         &self,
-        mut info: NewFileFromPath<'_>,
+        info: &NewFileFromPath<'_>,
         bucket_id: Option<&str>,
         existing_url: Option<&mut UploadUrl>,
     ) -> Result<models::B2FileInfo, B2Error> {
@@ -155,9 +155,9 @@ impl Client {
         let metadata = metadata?;
         let length = metadata.len();
 
-        let file_name = match info.file_name.take() {
-            Some(name) => name,
-            None => info.path.file_name().ok_or(B2Error::MissingFileName)?.to_string_lossy().into_owned(),
+        let file_name = match info.file_name {
+            Some(name) => name.into(),
+            None => info.path.file_name().ok_or(B2Error::MissingFileName)?.to_string_lossy(),
         };
 
         // small file, upload as a single file
@@ -178,10 +178,10 @@ impl Client {
 
                 let file = Arc::new(Mutex::new(file));
                 let whole_info = NewFileInfo::builder()
-                    .file_name(file_name.as_str())
-                    .content_type(info.content_type.as_deref())
+                    .file_name(&file_name)
+                    .content_type(info.content_type)
                     .content_length(content_length)
-                    .content_sha1(content_sha1.as_str())
+                    .content_sha1(&content_sha1)
                     .build();
 
                 url.upload_file(&whole_info, generate_file_upload_callback(file, 0, length)).await
@@ -200,10 +200,7 @@ impl Client {
             _ => info.max_simultaneous_uploads as usize,
         });
 
-        let whole_info = NewLargeFileInfo::builder()
-            .file_name(file_name.as_str())
-            .content_type(info.content_type.as_deref())
-            .build();
+        let whole_info = NewLargeFileInfo::builder().file_name(&file_name).content_type(info.content_type).build();
 
         let large = self.start_large_file(bucket_id, &whole_info).boxed().await?;
 
@@ -217,7 +214,7 @@ impl Client {
         let info = Arc::new(SharedInfo {
             large,
             path: info.path.to_owned(),
-            encryption: info.encryption,
+            encryption: info.encryption.clone(),
             part: AtomicU32::new(0),
         });
 
@@ -259,7 +256,7 @@ impl Client {
                     };
 
                     let part_info = NewPartInfo::builder()
-                        .content_sha1(sha1.as_str())
+                        .content_sha1(&sha1)
                         .content_length(end - start)
                         .part_number(unsafe { NonZeroU32::new_unchecked(part_number + 1) })
                         .encryption(info.encryption.clone())

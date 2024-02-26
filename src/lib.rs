@@ -1274,11 +1274,11 @@ mod tests {
 
         let info = NewFileFromPath::builder()
             .path(r#"./testing.webm"#.as_ref())
-            .content_type("video/webm".to_owned())
-            .file_name("testing.webm".to_owned())
+            .content_type("video/webm")
+            .file_name("testing.webm")
             .build();
 
-        let file = client.upload_from_path(info, None, None).await.unwrap();
+        let file = client.upload_from_path(&info, None, None).await.unwrap();
 
         println!("{:?}", file);
     }
@@ -1294,11 +1294,11 @@ mod tests {
 
         let info = NewFileFromPath::builder()
             .path(r#"Cargo.toml"#.as_ref())
-            .content_type("test/plain".to_owned())
-            .file_name("Cargo.toml".to_owned())
+            .content_type("test/plain")
+            .file_name("Cargo.toml")
             .build();
 
-        let file = client.upload_from_path(info, None, None).await.unwrap();
+        let file = client.upload_from_path(&info, None, None).await.unwrap();
 
         println!("{:?}", file);
     }

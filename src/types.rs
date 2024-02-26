@@ -261,7 +261,6 @@ impl FileRetention {
 ))]
 pub struct NewFileInfo<'a> {
     /// The name of the new file.
-    #[builder(setter(into))]
     pub file_name: &'a str,
 
     /// The length of the file in bytes.
@@ -276,7 +275,6 @@ pub struct NewFileInfo<'a> {
     pub content_type: Option<&'a str>,
 
     /// The SHA1 hash of the file's contents as a hex string.
-    #[builder(setter(into))]
     pub content_sha1: &'a str,
 
     /// The server-side encryption to use when uploading the file.
@@ -312,7 +310,6 @@ pub struct NewFileInfo<'a> {
 ))]
 pub struct NewLargeFileInfo<'a> {
     /// The name of the new file.
-    #[builder(setter(into))]
     pub file_name: &'a str,
 
     /// The MIME type of the file.
@@ -359,7 +356,6 @@ pub struct NewPartInfo<'a> {
     pub content_length: u64,
 
     /// The SHA1 hash of the part's contents as a hex string.
-    #[builder(setter(into))]
     pub content_sha1: &'a str,
 
     /// The server-side encryption to use when uploading the file.

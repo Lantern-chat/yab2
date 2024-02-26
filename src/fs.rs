@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{io::SeekFrom, path::Path, sync::Arc};
@@ -106,7 +107,10 @@ fn generate_file_upload_callback(file: Arc<Mutex<File>>, start: u64, end: u64) -
 /// Information for a new file to be uploaded.
 ///
 /// See the documentation for [`NewFileFromPath::builder`] for more information.
+///
+/// Used in [`Client::upload_from_path`].
 #[derive(Debug, typed_builder::TypedBuilder)]
+#[builder(doc)]
 pub struct NewFileFromPath<'a> {
     pub path: &'a Path,
 

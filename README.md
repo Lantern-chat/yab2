@@ -7,6 +7,11 @@ Yet Another Backblaze B2 Client
 
 Opinionated Backblaze B2 Client.
 
+## Disclaimer
+
+The native Backblaze B2 API is somewhat unspecified in places, or even incorrect in their docs. If you encounter
+any errors make sure to report them and they will be fixed.
+
 ## Features
 
 - Simple API making use of Rust's ownership for API constraints
@@ -26,10 +31,10 @@ Opinionated Backblaze B2 Client.
 - [ ] `b2_copy_file`
 - [ ] `b2_copy_part`
 - [ ] `b2_create_bucket`
-- [ ] `b2_create_key`
+- [x] `b2_create_key`
 - [ ] `b2_delete_bucket`
 - [x] `b2_delete_file_version`
-- [ ] `b2_delete_key`
+- [x] `b2_delete_key`
 - [x] `b2_download_file_by_id`
 - [x] `b2_download_file_by_name`
 - [x] `b2_finish_large_file`
@@ -41,11 +46,11 @@ Opinionated Backblaze B2 Client.
 - [x] `b2_list_buckets`
 - [x] `b2_list_file_names`
 - [x] `b2_list_file_versions`
-- [ ] `b2_list_keys`
+- [x] `b2_list_keys`
 - [ ] `b2_list_parts`
 - [ ] `b2_list_unfinished_large_files`
 - [x] `b2_start_large_file`
-- [ ] `b2_update_bucket`
+- [x] `b2_update_bucket`
 - [x] `b2_update_file_legal_hold`
 - [x] `b2_update_file_retention`
 - [x] `b2_upload_file`

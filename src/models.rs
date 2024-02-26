@@ -50,11 +50,8 @@ pub struct B2StorageApi {
     pub absolute_minimum_part_size: u64,
     pub s3_api_url: Box<str>,
 
-    /// A list of strings, each one naming a capability the key has. Possibilities are:
-    /// `listKeys`, `writeKeys`, `deleteKeys`, `listBuckets`, `writeBuckets`,
-    /// `deleteBuckets`, `listFiles`, `readFiles`, `shareFiles`, `writeFiles`, and `deleteFiles`.
     #[serde(default)]
-    pub capabilities: Vec<Box<str>>,
+    pub capabilities: Vec<B2Capability>,
 
     /// When present, access is restricted to one bucket.
     pub bucket_id: Option<Box<str>>,
@@ -72,16 +69,128 @@ pub struct B2StorageApi {
 
 impl B2StorageApi {
     /// Checks if the storage API has the capability to perform the given action.
-    pub fn contains(&self, capability: &str) -> bool {
-        self.capabilities.iter().any(|c| capability.eq_ignore_ascii_case(c))
+    pub fn contains(&self, capability: B2Capability) -> bool {
+        self.capabilities.iter().any(|&c| c == capability)
     }
 }
 
 impl B2Authorized {
     /// Checks if the authorized account has the capability to perform the given action.
-    pub fn allowed(&self, capability: &str) -> bool {
+    pub fn allowed(&self, capability: B2Capability) -> bool {
         self.api.storage.contains(capability)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum B2Capability {
+    ListKeys,
+    WriteKeys,
+    DeleteKeys,
+    ListAllBucketNames,
+    ListBuckets,
+    ReadBuckets,
+    WriteBuckets,
+    DeleteBuckets,
+    ReadBucketRetentions,
+    WriteBucketRetentions,
+    ReadBucketEncryption,
+    WriteBucketEncryption,
+    ListFiles,
+    ReadFiles,
+    ShareFiles,
+    WriteFiles,
+    DeleteFiles,
+    ReadFileLegalHolds,
+    WriteFileLegalHolds,
+    ReadFileRetentions,
+    WriteFileRetentions,
+    BypassGovernance,
+    ReadBucketReplications,
+    WriteBucketReplications,
+}
+
+impl AsRef<str> for B2Capability {
+    fn as_ref(&self) -> &str {
+        match self {
+            B2Capability::ListKeys => "listKeys",
+            B2Capability::WriteKeys => "writeKeys",
+            B2Capability::DeleteKeys => "deleteKeys",
+            B2Capability::ListAllBucketNames => "listAllBucketNames",
+            B2Capability::ListBuckets => "listBuckets",
+            B2Capability::ReadBuckets => "readBuckets",
+            B2Capability::WriteBuckets => "writeBuckets",
+            B2Capability::DeleteBuckets => "deleteBuckets",
+            B2Capability::ReadBucketRetentions => "readBucketRetentions",
+            B2Capability::WriteBucketRetentions => "writeBucketRetentions",
+            B2Capability::ReadBucketEncryption => "readBucketEncryption",
+            B2Capability::WriteBucketEncryption => "writeBucketEncryption",
+            B2Capability::ListFiles => "listFiles",
+            B2Capability::ReadFiles => "readFiles",
+            B2Capability::ShareFiles => "shareFiles",
+            B2Capability::WriteFiles => "writeFiles",
+            B2Capability::DeleteFiles => "deleteFiles",
+            B2Capability::ReadFileLegalHolds => "readFileLegalHolds",
+            B2Capability::WriteFileLegalHolds => "writeFileLegalHolds",
+            B2Capability::ReadFileRetentions => "readFileRetentions",
+            B2Capability::WriteFileRetentions => "writeFileRetentions",
+            B2Capability::BypassGovernance => "bypassGovernance",
+            B2Capability::ReadBucketReplications => "readBucketReplications",
+            B2Capability::WriteBucketReplications => "writeBucketReplications",
+        }
+    }
+}
+
+impl std::fmt::Display for B2Capability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2ApplicationKey {
+    /// The account that this application key is for.
+    pub account_id: Box<str>,
+
+    /// The name assigned when the key was created.
+    pub key_name: Box<str>,
+
+    /// The ID of the application key.
+    pub application_key_id: Box<str>,
+
+    #[serde(default)]
+    pub bucket_id: Option<Box<str>>,
+
+    /// A list of strings, each one naming a capability the key has.
+    #[serde(default)]
+    pub capabilities: Vec<B2Capability>,
+
+    /// When present, restricts access to files whose names start with the prefix.
+    #[serde(default)]
+    pub name_prefix: Option<Box<str>>,
+
+    /// When present and set to s3, the key can be used to sign requests to the S3 Compatible API.
+    #[serde(default)]
+    pub options: Vec<Box<str>>,
+
+    /// When present, says when this key will expire, in milliseconds since 1970.
+    #[serde(default = "u64::max_value")]
+    pub expiration_timestamp: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct B2ListedApplicationKey {
+    pub keys: Vec<B2ApplicationKey>,
+
+    /// Set if there are more keys beyond the ones that were returned. Pass this value
+    /// as `startApplicationKeyId` in the next query to continue listing keys.
+    ///
+    /// Note that this value may not be a valid application key ID,
+    /// but can still be used as the starting point for the next query.
+    #[serde(default)]
+    pub next_application_key_id: Option<Box<str>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -156,7 +265,7 @@ pub struct B2DefaultServerSideEncryption {
 }
 
 /// See [CORS Rules](https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules) for more information.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct B2CorsRule {
     pub cors_rule_name: Box<str>,
@@ -173,20 +282,23 @@ pub struct B2CorsRule {
     pub max_age_seconds: u64,
 }
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Default, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct B2ReplicationConfiguration {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub as_replication_source: Option<B2ReplicationSourceArray>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub as_replication_destination: Option<B2ReplicationDestination>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct B2ReplicationSourceArray {
     pub replication_rules: Vec<B2ReplicationSource>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct B2ReplicationSource {
     pub destination_bucket_id: Box<str>,
@@ -197,18 +309,20 @@ pub struct B2ReplicationSource {
     pub replication_rule_name: Box<str>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct B2ReplicationDestination {
     pub source_to_destination_key_mapping: Box<str>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct B2LifecycleRule {
     pub days_from_hiding_to_deleting: u64,
     pub days_from_uploading_to_hiding: u64,
-    pub file_name_prefix: Box<str>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name_prefix: Option<Box<str>>,
 }
 
 /// When you upload a file to B2, you must call `b2_get_upload_url` first to get the URL for uploading.

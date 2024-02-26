@@ -17,6 +17,39 @@ pub enum DownloadFileBy<'a> {
     FileName(&'a str),
 }
 
+/// Parameters for creating a new application key.
+#[derive(Default, Debug, Clone, typed_builder::TypedBuilder)]
+#[builder(doc)]
+pub struct CreateApplicationKey<'a> {
+    #[builder(default, setter(into))]
+    pub capabilities: Vec<models::B2Capability>,
+
+    pub key_name: &'a str,
+
+    /// When provided, the key will expire after the given number of seconds,
+    /// and will have `expirationTimestamp` set. Value must be a positive integer,
+    /// and must be less than 1000 days (in seconds).
+    #[builder(default, setter(into))]
+    pub valid_duration_in_seconds: Option<u64>,
+
+    /// When present, the new key can only access this bucket.
+    ///
+    /// When set, only these capabilities can be specified:
+    /// `listAllBucketNames`, `listBuckets`, `readBuckets`, `readBucketEncryption`,
+    /// `writeBucketEncryption`, `readBucketRetentions`, `writeBucketRetentions`,
+    /// `listFiles`, `readFiles`, `shareFiles`, `writeFiles`, `deleteFiles`,
+    /// `readFileLegalHolds`, `writeFileLegalHolds`, `readFileRetentions`,
+    /// `writeFileRetentions`, and `bypassGovernance`.
+    #[builder(default, setter(into))]
+    pub bucket_id: Option<&'a str>,
+
+    /// When present, restricts access to files whose names start with the prefix.
+    ///
+    /// You must set `bucketId` when setting this.
+    #[builder(default, setter(into))]
+    pub name_prefix: Option<&'a str>,
+}
+
 /// Parameters for listing B2 Buckets.
 ///
 /// When using an authorization token that is restricted to a bucket,
@@ -61,6 +94,43 @@ pub struct ListBuckets<'a> {
     /// A special filter value of [`All`](models::B2BucketType::All) will return all bucket types.
     #[builder(default, via_mutators)]
     pub bucket_types: arrayvec::ArrayVec<models::B2BucketType, 6>, // 6 is the number of variants in B2BucketType
+}
+
+#[derive(Debug, typed_builder::TypedBuilder)]
+#[builder(doc)]
+pub struct UpdateBucket<'a> {
+    #[builder(default, setter(into))]
+    pub if_revision_is: Option<u64>,
+
+    pub bucket_id: &'a str,
+
+    #[builder(default, setter(into))]
+    pub bucket_type: Option<models::B2BucketType>,
+
+    #[builder(default, setter(into))]
+    pub bucket_info: Option<std::collections::HashMap<Box<str>, Box<str>>>,
+
+    #[builder(default, setter(into))]
+    pub cors_rules: Option<Vec<models::B2CorsRule>>,
+
+    #[builder(default, setter(into))]
+    pub default_retention: Option<&'a str>,
+
+    #[builder(default, setter(into))]
+    pub default_server_side_encryption: Option<sse::ServerSideEncryption>,
+
+    #[builder(default, setter(into))]
+    pub default_lifetime: Option<models::B2LifecycleRule>,
+
+    /// If present, the Boolean value specifies whether the bucket has Object Lock enabled.
+    ///
+    /// Once Object Lock is enabled on a bucket, it cannot be disabled.
+    ///
+    /// A value of true will be accepted if you have `writeBucketRetentions` capability.
+    /// But you cannot enable Object Lock on a restricted bucket (e.g. share buckets, snapshot)
+    /// or on a bucket that contains source replication configuration.
+    #[builder(default, setter(into))]
+    pub file_lock_enabled: Option<bool>,
 }
 
 /// Parameters for listing files in a bucket.
@@ -240,10 +310,10 @@ pub struct NewFileInfo {
         self.encryption = encryption.into();
     }
 ))]
-pub struct NewLargeFileInfo {
+pub struct NewLargeFileInfo<'a> {
     /// The name of the new file.
     #[builder(setter(into))]
-    pub file_name: String,
+    pub file_name: &'a str,
 
     /// The MIME type of the file.
     ///
@@ -251,7 +321,7 @@ pub struct NewLargeFileInfo {
     /// or if specified to be `bz/x-auto` then the B2 API will attempt to
     /// determine the file's content type automatically.
     #[builder(default, setter(into))]
-    pub content_type: Option<String>,
+    pub content_type: Option<&'a str>,
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default, via_mutators)]
@@ -280,7 +350,7 @@ pub struct NewLargeFileInfo {
         self.encryption = encryption.into();
     }
 ))]
-pub struct NewPartInfo {
+pub struct NewPartInfo<'a> {
     /// The part number of the new large file part.
     #[builder(setter(into))]
     pub part_number: std::num::NonZeroU32,
@@ -290,7 +360,7 @@ pub struct NewPartInfo {
 
     /// The SHA1 hash of the part's contents as a hex string.
     #[builder(setter(into))]
-    pub content_sha1: String,
+    pub content_sha1: &'a str,
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default, via_mutators)]
@@ -322,11 +392,11 @@ impl NewFileInfo {
     }
 }
 
-impl NewPartInfo {
+impl NewPartInfo<'_> {
     pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
         h!(headers."x-bz-part-number" => &self.part_number.to_string());
         h!(headers."content-length" => &self.content_length.to_string());
-        h!(headers."x-bz-content-sha1" => &self.content_sha1);
+        h!(headers."x-bz-content-sha1" => self.content_sha1);
 
         self.encryption.add_headers(headers);
     }

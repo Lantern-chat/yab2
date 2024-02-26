@@ -200,10 +200,12 @@ impl Client {
             _ => info.max_simultaneous_uploads as usize,
         });
 
-        let whole_info =
-            NewLargeFileInfo::builder().file_name(file_name).content_type(info.content_type.take()).build();
+        let whole_info = NewLargeFileInfo::builder()
+            .file_name(file_name.as_str())
+            .content_type(info.content_type.as_deref())
+            .build();
 
-        let large = self.start_large_file(bucket_id, &whole_info).boxed().await?;
+        let large = self.start_large_file(bucket_id, whole_info).boxed().await?;
 
         struct SharedInfo {
             large: LargeFileUpload,
@@ -257,14 +259,14 @@ impl Client {
                     };
 
                     let part_info = NewPartInfo::builder()
-                        .content_sha1(sha1)
+                        .content_sha1(sha1.as_str())
                         .content_length(end - start)
                         .part_number(unsafe { NonZeroU32::new_unchecked(part_number + 1) })
                         .encryption(info.encryption.clone())
                         .build();
 
                     let cb = generate_file_upload_callback(file.clone(), start, end);
-                    let part = info.large.upload_part(&mut url, &part_info, cb).await?;
+                    let part = info.large.upload_part(&mut url, part_info, cb).await?;
 
                     parts.push(Ok::<_, B2Error>(part));
                 }

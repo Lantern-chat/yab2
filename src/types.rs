@@ -259,10 +259,10 @@ impl FileRetention {
         self.encryption = encryption.into();
     }
 ))]
-pub struct NewFileInfo {
+pub struct NewFileInfo<'a> {
     /// The name of the new file.
     #[builder(setter(into))]
-    pub file_name: String,
+    pub file_name: &'a str,
 
     /// The length of the file in bytes.
     pub content_length: u64,
@@ -273,11 +273,11 @@ pub struct NewFileInfo {
     /// or if specified to be `bz/x-auto` then the B2 API will attempt to
     /// determine the file's content type automatically.
     #[builder(default, setter(into))]
-    pub content_type: Option<String>,
+    pub content_type: Option<&'a str>,
 
     /// The SHA1 hash of the file's contents as a hex string.
     #[builder(setter(into))]
-    pub content_sha1: String,
+    pub content_sha1: &'a str,
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default, via_mutators)]
@@ -367,12 +367,12 @@ pub struct NewPartInfo<'a> {
     pub encryption: sse::ServerSideEncryption,
 }
 
-impl NewFileInfo {
+impl NewFileInfo<'_> {
     pub(crate) fn add_headers(&self, headers: &mut HeaderMap) {
         h!(headers."x-bz-file-name" => &self.file_name);
-        h!(headers."content-type" => self.content_type.as_deref().unwrap_or("application/octet-stream"));
+        h!(headers."content-type" => self.content_type.unwrap_or("application/octet-stream"));
         h!(headers."content-length" => &self.content_length.to_string());
-        h!(headers."x-bz-content-sha1" => &self.content_sha1);
+        h!(headers."x-bz-content-sha1" => self.content_sha1);
 
         if let Some(ref retention) = self.retention {
             if let Some(ref mode) = retention.mode {

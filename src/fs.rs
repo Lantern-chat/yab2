@@ -178,10 +178,10 @@ impl Client {
 
                 let file = Arc::new(Mutex::new(file));
                 let whole_info = NewFileInfo::builder()
-                    .file_name(file_name)
-                    .content_type(info.content_type)
+                    .file_name(file_name.as_str())
+                    .content_type(info.content_type.as_deref())
                     .content_length(content_length)
-                    .content_sha1(content_sha1)
+                    .content_sha1(content_sha1.as_str())
                     .build();
 
                 url.upload_file(&whole_info, generate_file_upload_callback(file, 0, length)).await
@@ -205,7 +205,7 @@ impl Client {
             .content_type(info.content_type.as_deref())
             .build();
 
-        let large = self.start_large_file(bucket_id, whole_info).boxed().await?;
+        let large = self.start_large_file(bucket_id, &whole_info).boxed().await?;
 
         struct SharedInfo {
             large: LargeFileUpload,
@@ -266,7 +266,7 @@ impl Client {
                         .build();
 
                     let cb = generate_file_upload_callback(file.clone(), start, end);
-                    let part = info.large.upload_part(&mut url, part_info, cb).await?;
+                    let part = info.large.upload_part(&mut url, &part_info, cb).await?;
 
                     parts.push(Ok::<_, B2Error>(part));
                 }

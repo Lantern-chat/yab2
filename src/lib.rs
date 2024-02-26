@@ -203,11 +203,16 @@ impl Client {
     {
         let resp = builder.send().await?;
 
-        if !resp.status().is_success() {
-            return Err(B2Error::B2ErrorMessage(resp.json().await?));
+        let is_error = !resp.status().is_success();
+
+        // only get the body once to avoid multiple awaits
+        let body = resp.bytes().await?;
+
+        if is_error {
+            return Err(B2Error::B2ErrorMessage(serde_json::from_slice(&body)?));
         }
 
-        Ok(serde_json::from_str(&resp.text().await?)?)
+        Ok(serde_json::from_slice(&body)?)
     }
 
     async fn do_auth(client: &reqwest::Client, config: ClientBuilder) -> Result<ClientState, B2Error> {
@@ -277,7 +282,7 @@ impl Client {
     /// Creates a new application key.
     ///
     /// **NOTE**: There is a limit of 100 million key creations per account.
-    pub async fn create_key(&self, key: CreateApplicationKey<'_>) -> Result<models::B2ApplicationKey, B2Error> {
+    pub async fn create_key(&self, key: &CreateApplicationKey<'_>) -> Result<models::B2ApplicationKey, B2Error> {
         // Check for invalid capabilities before making the request, since only a subset of capabilities are allowed
         // when bucket_id is set.
         if key.bucket_id.is_some() {
@@ -306,8 +311,6 @@ impl Client {
             name_prefix: Option<&'a str>,
             valid_duration_in_seconds: Option<u64>,
         }
-
-        let key = &key; // force borrow
 
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
@@ -397,7 +400,7 @@ impl Client {
     ///
     /// When using an authorization token that is restricted to a bucket, you must include the `bucket_id`
     /// or `bucket_name` of that bucket in the request, or the request will be denied.
-    pub async fn list_buckets(&self, query: ListBuckets<'_>) -> Result<Vec<models::B2Bucket>, B2Error> {
+    pub async fn list_buckets(&self, query: &ListBuckets<'_>) -> Result<Vec<models::B2Bucket>, B2Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct B2ListBucketsQuery<'a> {
@@ -448,7 +451,7 @@ impl Client {
     /// Can be used to allow everyone to download the contents of the bucket without providing
     /// any authorization, or to prevent anyone from downloading the contents of the bucket
     /// without providing a bucket auth token.
-    pub async fn update_bucket(&self, update: UpdateBucket<'_>) -> Result<models::B2Bucket, B2Error> {
+    pub async fn update_bucket(&self, update: &UpdateBucket<'_>) -> Result<models::B2Bucket, B2Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct B2UpdateBucket<'a> {
@@ -479,8 +482,6 @@ impl Client {
             #[serde(skip_serializing_if = "Option::is_none")]
             file_lock_enabled: Option<bool>,
         }
-
-        let update = &update; // force borrow
 
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
@@ -615,17 +616,17 @@ impl Client {
     ///
     /// println!("{:#?}", files);
     /// ```
-    pub async fn list_files(&self, mut args: ListFiles<'_>) -> Result<models::B2FileInfoList, B2Error> {
-        if !args.all_versions {
-            args.start_file_id = None; // not used
-        }
-
+    pub async fn list_files(&self, args: &ListFiles<'_>) -> Result<models::B2FileInfoList, B2Error> {
         self.run_request_with_reauth(move |b2| async move {
             let state = b2.state.read().await;
 
             state.check_capability(B2Capability::ListFiles)?;
 
-            let mut args = ListFiles { ..args }; // redefine lifetime of `args`
+            let mut args = ListFiles { ..*args }; // redefine lifetime of `args`
+
+            if !args.all_versions {
+                args.start_file_id = None; // not used
+            }
 
             args.bucket_id = Some(state.bucket_id(args.bucket_id)?);
 
@@ -887,7 +888,7 @@ impl Client {
     pub async fn start_large_file(
         &self,
         bucket_id: Option<&str>,
-        info: NewLargeFileInfo<'_>,
+        info: &NewLargeFileInfo<'_>,
     ) -> Result<LargeFileUpload, B2Error> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -906,8 +907,6 @@ impl Client {
             #[serde(skip_serializing_if = "sse::ServerSideEncryption::is_default")]
             encryption: &'a sse::ServerSideEncryption,
         }
-
-        let info = &info; // force borrow
 
         let info = self
             .run_request_with_reauth(|b2| async move {
@@ -998,12 +997,12 @@ impl RawUploadUrl {
         }
     }
 
-    async fn upload_file<F, B>(&mut self, info: &NewFileInfo, file: F) -> Result<models::B2FileInfo, B2Error>
+    async fn upload_file<F, B>(&mut self, info: &NewFileInfo<'_>, file: F) -> Result<models::B2FileInfo, B2Error>
     where
         F: Fn() -> B,
         B: Into<reqwest::Body>,
     {
-        self.check_prefix(&info.file_name)?;
+        self.check_prefix(info.file_name)?;
 
         self.do_upload(|builder| {
             builder.body(file()).headers({
@@ -1015,7 +1014,7 @@ impl RawUploadUrl {
         .await
     }
 
-    async fn upload_part<F, B>(&mut self, info: NewPartInfo<'_>, body: F) -> Result<models::B2PartInfo, B2Error>
+    async fn upload_part<F, B>(&mut self, info: &NewPartInfo<'_>, body: F) -> Result<models::B2PartInfo, B2Error>
     where
         F: Fn() -> B,
         B: Into<reqwest::Body>,
@@ -1037,7 +1036,11 @@ impl UploadUrl {
     /// The `file` parameter is a closure that returns a value to be converted into a `reqwest::Body`.
     /// This method may need to retry the request if the URL or authorization token has expired, therefore
     /// it is recommended the body-creation closure be cheap to call multiple times.
-    pub async fn upload_file<F, B>(&mut self, info: &NewFileInfo, file: F) -> Result<models::B2FileInfo, B2Error>
+    pub async fn upload_file<F, B>(
+        &mut self,
+        info: &NewFileInfo<'_>,
+        file: F,
+    ) -> Result<models::B2FileInfo, B2Error>
     where
         F: Fn() -> B,
         B: Into<reqwest::Body>,
@@ -1050,7 +1053,7 @@ impl UploadUrl {
     /// The `bytes` parameter is a value to be converted into the body of the request.
     pub async fn upload_file_bytes(
         &mut self,
-        info: &NewFileInfo,
+        info: &NewFileInfo<'_>,
         bytes: impl Into<bytes::Bytes>,
     ) -> Result<models::B2FileInfo, B2Error> {
         let bytes = bytes.into();
@@ -1076,7 +1079,7 @@ impl LargeFileUpload {
     pub async fn start(
         client: &Client,
         bucket_id: Option<&str>,
-        info: NewLargeFileInfo<'_>,
+        info: &NewLargeFileInfo<'_>,
     ) -> Result<LargeFileUpload, B2Error> {
         client.start_large_file(bucket_id, info).await
     }
@@ -1104,7 +1107,7 @@ impl LargeFileUpload {
     pub async fn upload_part<F, B>(
         &self,
         url: &mut UploadPartUrl,
-        info: NewPartInfo<'_>,
+        info: &NewPartInfo<'_>,
         part: F,
     ) -> Result<models::B2PartInfo, B2Error>
     where
@@ -1132,7 +1135,7 @@ impl LargeFileUpload {
     pub async fn upload_part_bytes(
         &self,
         url: &mut UploadPartUrl,
-        info: NewPartInfo<'_>,
+        info: &NewPartInfo<'_>,
         bytes: impl Into<bytes::Bytes>,
     ) -> Result<models::B2PartInfo, B2Error> {
         let bytes = bytes.into();
@@ -1240,12 +1243,13 @@ mod tests {
         file.read_to_end(&mut bytes).await.unwrap();
 
         let bytes = bytes::Bytes::from(bytes); // bytes
+        let sha1 = hex::encode(Sha1::new().chain_update(&bytes).finalize());
 
         let info = NewFileInfo::builder()
-            .file_name("testing/Cargo.toml".to_owned())
+            .file_name("testing/Cargo.toml")
             .content_length(meta.len())
-            .content_type("text/plain".to_owned())
-            .content_sha1(hex::encode(Sha1::new().chain_update(&bytes).finalize()))
+            .content_type("text/plain")
+            .content_sha1(sha1.as_str())
             .build();
 
         let file_info = upload.upload_file_bytes(&info, bytes).await.unwrap();
@@ -1308,7 +1312,7 @@ mod tests {
 
         let client = ClientBuilder::new(&app_id, &app_key).authorize().await.unwrap();
 
-        let files = client.list_files(ListFiles::builder().all_versions(false).build()).await.unwrap();
+        let files = client.list_files(&ListFiles::builder().all_versions(false).build()).await.unwrap();
 
         println!("{:#?}", files);
     }
@@ -1323,7 +1327,7 @@ mod tests {
         let client = ClientBuilder::new(&app_id, &app_key).authorize().await.unwrap();
 
         let buckets = client
-            .list_buckets(ListBuckets::builder().bucket_types([models::B2BucketType::All]).build())
+            .list_buckets(&ListBuckets::builder().bucket_types([models::B2BucketType::All]).build())
             .await
             .unwrap();
 

@@ -132,7 +132,15 @@ pub struct NewFileFromPath<'a> {
 
     /// The server-side encryption to use when uploading the file.
     #[builder(default)]
-    pub encryption: Option<sse::ServerSideEncryption>,
+    pub encryption: sse::ServerSideEncryption,
+
+    /// The file retention settings to apply to the file.
+    #[builder(default, setter(into))]
+    pub retention: Option<FileRetention>,
+
+    /// Whether to apply a legal hold to the file.
+    #[builder(default)]
+    pub legal_hold: Option<bool>,
 }
 
 impl Client {
@@ -177,12 +185,16 @@ impl Client {
                 let content_sha1 = hash_chunk(&mut file, 0, length).await?;
 
                 let file = Arc::new(Mutex::new(file));
-                let whole_info = NewFileInfo::builder()
-                    .file_name(&file_name)
-                    .content_type(info.content_type)
-                    .content_length(content_length)
-                    .content_sha1(&content_sha1)
-                    .build();
+
+                let whole_info = NewFileInfo {
+                    file_name: &file_name,
+                    content_type: info.content_type,
+                    content_length,
+                    content_sha1: &content_sha1,
+                    encryption: info.encryption.clone(),
+                    retention: info.retention.clone(),
+                    legal_hold: info.legal_hold,
+                };
 
                 url.upload_file(&whole_info, generate_file_upload_callback(file, 0, length)).await
             });
@@ -200,22 +212,32 @@ impl Client {
             _ => info.max_simultaneous_uploads as usize,
         });
 
-        let whole_info = NewLargeFileInfo::builder().file_name(&file_name).content_type(info.content_type).build();
-
-        let large = self.start_large_file(bucket_id, &whole_info).boxed().await?;
+        let large = self
+            .start_large_file(
+                bucket_id,
+                &NewLargeFileInfo {
+                    file_name: &file_name,
+                    content_type: info.content_type,
+                    encryption: info.encryption.clone(),
+                    retention: info.retention.clone(),
+                    legal_hold: info.legal_hold,
+                },
+            )
+            .boxed()
+            .await?;
 
         struct SharedInfo {
             large: LargeFileUpload,
-            path: PathBuf,
-            encryption: Option<sse::ServerSideEncryption>,
             part: AtomicU32,
+            path: PathBuf,
+            encryption: sse::ServerSideEncryption,
         }
 
         let info = Arc::new(SharedInfo {
             large,
+            part: AtomicU32::new(0),
             path: info.path.to_owned(),
             encryption: info.encryption.clone(),
-            part: AtomicU32::new(0),
         });
 
         // inject the old file handle for the first iteration
@@ -255,12 +277,12 @@ impl Client {
                         hash_chunk(&mut file, start, end).await?
                     };
 
-                    let part_info = NewPartInfo::builder()
-                        .content_sha1(&sha1)
-                        .content_length(end - start)
-                        .part_number(unsafe { NonZeroU32::new_unchecked(part_number + 1) })
-                        .encryption(info.encryption.clone())
-                        .build();
+                    let part_info = NewPartInfo {
+                        content_sha1: &sha1,
+                        content_length: end - start,
+                        part_number: unsafe { NonZeroU32::new_unchecked(part_number + 1) },
+                        encryption: info.encryption.clone(),
+                    };
 
                     let cb = generate_file_upload_callback(file.clone(), start, end);
                     let part = info.large.upload_part(&mut url, &part_info, cb).await?;

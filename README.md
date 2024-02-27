@@ -24,13 +24,20 @@ any errors make sure to report them and they will be fixed.
 - `reqwest_compression` (enables deflate/gzip features on `reqwest`)
 - `large_buffers` (enables large buffer support, 64KiB instead of 8KiB)
 
+## **WARNING**
+
+Do not include Protected Health Information (PHI) or Personally Identifiable Information (PII)
+in bucket names; object, file, or folder names; or other metadata. This metadata is not encrypted
+in a way that meets Health Insurance Portability and Accountability Act (HIPAA) protection requirements
+for PHI/PII data, and it is not generally encrypted in client-side encryption architectures.
+
 ## API Coverage
 
 - [x] `b2_authorize_account`
 - [x] `b2_cancel_large_file`
 - [ ] `b2_copy_file`
 - [ ] `b2_copy_part`
-- [ ] `b2_create_bucket`
+- [x] `b2_create_bucket`
 - [x] `b2_create_key`
 - [ ] `b2_delete_bucket`
 - [x] `b2_delete_file_version`

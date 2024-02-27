@@ -1,4 +1,5 @@
 use reqwest::header::HeaderMap;
+use smol_str::SmolStr;
 
 use crate::models::{self, capabilities::B2CapabilitiesStringSet};
 
@@ -96,6 +97,43 @@ pub struct ListBuckets<'a> {
     pub bucket_types: arrayvec::ArrayVec<models::B2BucketType, 6>, // 6 is the number of variants in B2BucketType
 }
 
+/// Parameters for creating a new bucket.
+///
+/// Used in [`Client::create_bucket`](crate::Client::create_bucket).
+#[derive(Debug, typed_builder::TypedBuilder)]
+#[builder(doc)]
+pub struct CreateBucket<'a> {
+    pub bucket_name: &'a str,
+
+    /// If true the bucket will be public, otherwise it will be private.
+    #[builder(default)]
+    pub public: bool,
+
+    #[builder(default, setter(into))]
+    pub bucket_info: Option<std::collections::HashMap<SmolStr, SmolStr>>,
+
+    #[builder(default, setter(into))]
+    pub cors_rules: Option<Vec<models::B2CorsRule>>,
+
+    #[builder(default, setter(into))]
+    pub default_retention: Option<&'a str>,
+
+    #[builder(default, setter(into))]
+    pub default_server_side_encryption: Option<sse::ServerSideEncryption>,
+
+    #[builder(default, setter(into))]
+    pub lifecycle_rules: Option<Vec<models::B2LifecycleRule>>,
+
+    #[builder(default, setter(into))]
+    pub replication: Option<models::B2ReplicationConfiguration>,
+
+    /// If present, the Boolean value specifies whether the bucket has Object Lock enabled.
+    ///
+    /// Once Object Lock is enabled on a bucket, it cannot be disabled.
+    #[builder(default, setter(into))]
+    pub file_lock_enabled: Option<bool>,
+}
+
 #[derive(Debug, typed_builder::TypedBuilder)]
 #[builder(doc)]
 pub struct UpdateBucket<'a> {
@@ -108,7 +146,7 @@ pub struct UpdateBucket<'a> {
     pub bucket_type: Option<models::B2BucketType>,
 
     #[builder(default, setter(into))]
-    pub bucket_info: Option<std::collections::HashMap<Box<str>, Box<str>>>,
+    pub bucket_info: Option<std::collections::HashMap<SmolStr, SmolStr>>,
 
     #[builder(default, setter(into))]
     pub cors_rules: Option<Vec<models::B2CorsRule>>,

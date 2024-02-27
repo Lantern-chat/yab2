@@ -1,6 +1,6 @@
 //! Error Handling types for the B2 API.
 
-use crate::models::B2Capability;
+use crate::models::capabilities::B2Capability;
 
 /// The B2 API returns errors in a JSON format. This struct represents that format.
 #[derive(Debug, Deserialize)]
@@ -51,10 +51,10 @@ pub enum B2Error {
     #[error("Invalid Part Sorting")]
     InvalidPartSorting,
 
-    #[error("Missing Capability: {0}")]
+    #[error("Missing Capability: {0:?}")]
     MissingCapability(B2Capability),
 
-    #[error("Invalid Capability: {0}")]
+    #[error("Invalid Capability: {0:?}")]
     InvalidCapability(B2Capability),
 
     #[error("Missing File Name")]

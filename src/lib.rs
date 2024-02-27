@@ -75,7 +75,7 @@ mod fs;
 
 pub use error::B2Error;
 
-use models::B2Capability;
+use models::capabilities::{B2CapabilitiesStringSet, B2Capability};
 
 struct ClientState {
     /// The builder used to create the client.
@@ -139,6 +139,8 @@ pub struct DownloadedFile {
 
 impl ClientBuilder {
     /// Creates a new client builder with the given key ID and application key.
+    ///
+    /// **NOTE**: The account ID can be used in place of the master application key ID.
     pub fn new(key_id: &str, app_key: &str) -> ClientBuilder {
         ClientBuilder {
             auth: models::create_auth_header(key_id, app_key),
@@ -291,26 +293,17 @@ impl Client {
         // Check for invalid capabilities before making the request, since only a subset of capabilities are allowed
         // when bucket_id is set.
         if key.bucket_id.is_some() {
-            type C = B2Capability;
-            #[rustfmt::skip]
-            const ALLOWED_CAPS: &[B2Capability] = &[
-                C::ListAllBucketNames, C::ListBuckets, C::ReadBuckets, C::ReadBucketEncryption,
-                C::WriteBucketEncryption, C::ReadBucketRetentions, C::WriteBucketRetentions, C::ListFiles,
-                C::ReadFiles, C::ShareFiles, C::WriteFiles, C::DeleteFiles, C::ReadFileLegalHolds,
-                C::WriteFileLegalHolds, C::ReadFileRetentions, C::WriteFileRetentions, C::BypassGovernance,
-            ];
+            let requested = *key.capabilities;
 
-            for cap in key.capabilities.iter() {
-                if !ALLOWED_CAPS.contains(cap) {
-                    return Err(B2Error::InvalidCapability(*cap));
-                }
+            if !B2Capability::ALLOWED_CAPABILITIES_IN_BUCKET_KEY.contains(requested) {
+                return Err(B2Error::InvalidCapability(requested));
             }
         }
 
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct B2CreateKey<'a> {
-            capabilities: &'a [B2Capability],
+            capabilities: B2CapabilitiesStringSet,
             key_name: &'a str,
             bucket_id: Option<&'a str>,
             name_prefix: Option<&'a str>,
@@ -320,11 +313,11 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::WriteKeys)?;
+            state.check_capability(B2Capability::WRITE_KEYS)?;
 
             Self::json(
                 b2.req(Method::POST, &state.auth, state.url("b2_create_key")).json(&B2CreateKey {
-                    capabilities: key.capabilities.as_slice(),
+                    capabilities: key.capabilities,
                     key_name: key.key_name,
                     bucket_id: key.bucket_id,
                     name_prefix: key.name_prefix,
@@ -364,7 +357,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::ListKeys)?;
+            state.check_capability(B2Capability::LIST_KEYS)?;
 
             Self::json(
                 b2.req(Method::GET, &state.auth, state.url("b2_list_keys")).query(&B2ListKeysQuery {
@@ -388,7 +381,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::DeleteKeys)?;
+            state.check_capability(B2Capability::DELETE_KEYS)?;
 
             Self::json(
                 b2.req(Method::POST, &state.auth, state.url("b2_delete_key")).json(&B2DeleteKey {
@@ -430,7 +423,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::ListBuckets)?;
+            state.check_capability(B2Capability::LIST_BUCKETS)?;
 
             // NOTE: We have to use POST because the `bucketTypes` parameter is an array
             // and that doesn't play well with serde_urlencoded, but luckily B2 supports POST as well.
@@ -491,15 +484,17 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::WriteBuckets)?;
-
-            if update.default_server_side_encryption.is_some() {
-                state.check_capability(B2Capability::WriteBucketEncryption)?;
-            }
-
-            if update.default_retention.is_some() {
-                state.check_capability(B2Capability::WriteBucketRetentions)?;
-            }
+            state.check_capability(
+                B2Capability::WRITE_BUCKETS
+                    .cond_union(
+                        update.default_server_side_encryption.is_some(),
+                        B2Capability::WRITE_BUCKET_ENCRYPTION,
+                    )
+                    .cond_union(
+                        update.default_retention.is_some(),
+                        B2Capability::WRITE_BUCKET_RETENTIONS,
+                    ),
+            )?;
 
             Self::json(
                 b2.req(Method::POST, &state.auth, state.url("b2_update_bucket")).json(&B2UpdateBucket {
@@ -531,7 +526,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::ReadFiles)?; // TODO: check if this is the right capability
+            state.check_capability(B2Capability::READ_FILES)?; // TODO: check if this is the right capability
 
             Client::json(b2.req(Method::GET, &state.auth, "b2_get_file_info").query(&B2GetFileInfo { file_id }))
                 .await
@@ -564,7 +559,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::ReadFiles)?;
+            state.check_capability(B2Capability::READ_FILES)?;
 
             let resp = b2
                 .req(Method::GET, &state.auth, {
@@ -625,7 +620,7 @@ impl Client {
         self.run_request_with_reauth(move |b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::ListFiles)?;
+            state.check_capability(B2Capability::LIST_FILES)?;
 
             let mut args = ListFiles { ..*args }; // redefine lifetime of `args`
 
@@ -660,7 +655,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::WriteFiles)?;
+            state.check_capability(B2Capability::WRITE_FILES)?;
             state.check_prefix(Some(file_name))?;
 
             let body = B2HideFile {
@@ -701,12 +696,11 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::DeleteFiles)?;
-            state.check_prefix(Some(file_name))?;
+            state.check_capability(
+                B2Capability::DELETE_FILES.cond_union(bypass_governance, B2Capability::BYPASS_GOVERNANCE),
+            )?;
 
-            if bypass_governance {
-                state.check_capability(B2Capability::BypassGovernance)?;
-            }
+            state.check_prefix(Some(file_name))?;
 
             let body = B2DeleteFile {
                 file_id,
@@ -748,7 +742,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::WriteFileLegalHolds)?;
+            state.check_capability(B2Capability::WRITE_FILE_LEGAL_HOLDS)?;
             state.check_prefix(Some(file_name))?;
 
             let body = B2UpdateLegalHold {
@@ -806,7 +800,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::WriteFileRetentions)?;
+            state.check_capability(B2Capability::WRITE_FILE_RETENTIONS)?;
             state.check_prefix(Some(file_name))?;
 
             Self::json(b2.req(Method::POST, &state.auth, state.url("b2_update_file_retention")).json(body))
@@ -834,7 +828,7 @@ impl Client {
         self.run_request_with_reauth(|b2| async move {
             let state = b2.state.read().await;
 
-            state.check_capability(B2Capability::WriteFiles)?;
+            state.check_capability(B2Capability::WRITE_FILES)?;
 
             let mut query = B2GetUploadUrlQuery { bucket_id, file_id };
 
@@ -917,7 +911,7 @@ impl Client {
             .run_request_with_reauth(|b2| async move {
                 let state = b2.state.read().await;
 
-                state.check_capability(B2Capability::WriteFiles)?;
+                state.check_capability(B2Capability::WRITE_FILES)?;
                 state.check_prefix(Some(info.file_name))?;
 
                 let body = B2StartLargeFile {

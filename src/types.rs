@@ -1,6 +1,6 @@
 use reqwest::header::HeaderMap;
 
-use crate::models;
+use crate::models::{self, capabilities::B2CapabilitiesStringSet};
 
 /// Identifier for a file to download, either by its file ID or file name.
 ///
@@ -22,7 +22,7 @@ pub enum DownloadFileBy<'a> {
 #[builder(doc)]
 pub struct CreateApplicationKey<'a> {
     #[builder(default, setter(into))]
-    pub capabilities: Vec<models::B2Capability>,
+    pub capabilities: B2CapabilitiesStringSet,
 
     pub key_name: &'a str,
 

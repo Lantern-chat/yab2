@@ -22,10 +22,10 @@
 //!
 //! ## **WARNING**
 //!
-//! Do not include Protected Health Information (PHI) or Personally Identifiable Information (PII)
+//! **Do not include Protected Health Information (PHI) or Personally Identifiable Information (PII)
 //! in bucket names; object, file, or folder names; or other metadata. This metadata is not encrypted
 //! in a way that meets Health Insurance Portability and Accountability Act (HIPAA) protection requirements
-//! for PHI/PII data, and it is not generally encrypted in client-side encryption architectures.
+//! for PHI/PII data, and it is not generally encrypted in client-side encryption architectures.**
 
 #![allow(clippy::redundant_pattern_matching)]
 

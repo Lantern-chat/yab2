@@ -21,14 +21,9 @@ pool = ["parking_lot"]                                           # Enables the `
 large_buffers = []                                               # Enable large buffer support, 64KiB instead of 8KiB
 reqwest_compression = ["reqwest/gzip", "reqwest/deflate"]        # Enable common compression support for reqwest
 
-[dependencies.reqwest]
-git = "https://github.com/seanmonstar/reqwest"
-branch = "0.12-dev"
-default_features = false
-features = ["gzip", "deflate", "json", "stream"]
-
 [dependencies]
 headers = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["gzip", "deflate", "json", "stream"] }
 
 smol_str = { version = "0.2.1", features = ["serde"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }

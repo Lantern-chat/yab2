@@ -22,9 +22,11 @@ pub enum DownloadFileBy<'a> {
 #[derive(Default, Debug, Clone, typed_builder::TypedBuilder)]
 #[builder(doc)]
 pub struct CreateApplicationKey<'a> {
+    /// The capabilities to grant to the new key.
     #[builder(default, setter(into))]
     pub capabilities: B2CapabilitiesStringSet,
 
+    /// The name of the new key.
     pub key_name: &'a str,
 
     /// When provided, the key will expire after the given number of seconds,
@@ -103,6 +105,7 @@ pub struct ListBuckets<'a> {
 #[derive(Debug, typed_builder::TypedBuilder)]
 #[builder(doc)]
 pub struct CreateBucket<'a> {
+    /// The name of the new bucket.
     pub bucket_name: &'a str,
 
     /// If true the bucket will be public, otherwise it will be private.

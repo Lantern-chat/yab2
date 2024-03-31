@@ -1,3 +1,5 @@
+//! B2 capabilities and their serialization as a list of strings.
+
 bitflags::bitflags! {
     #[repr(transparent)]
     #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +57,7 @@ impl B2Capability {
         if cond { self.union(other) } else { self }
     }
 
+    /// All B2 capabilities and their names in an array.
     pub const ALL_CAPABILITIES_AND_NAMES: [(B2Capability, &'static str); 24] = [
         (B2Capability::LIST_KEYS, "listKeys"),
         (B2Capability::WRITE_KEYS, "writeKeys"),

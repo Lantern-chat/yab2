@@ -112,6 +112,7 @@ fn generate_file_upload_callback(file: Arc<Mutex<File>>, start: u64, end: u64) -
 #[derive(Debug, typed_builder::TypedBuilder)]
 #[builder(doc)]
 pub struct NewFileFromPath<'a> {
+    /// The filesystem path of the file to upload.
     pub path: &'a Path,
 
     /// The name of the new file.
@@ -284,6 +285,7 @@ impl Client {
                     let part_info = NewPartInfo {
                         content_sha1: &sha1,
                         content_length: end - start,
+                        // SAFETY: part_number is unsigned, adding 1 will never be 0
                         part_number: unsafe { NonZeroU32::new_unchecked(part_number + 1) },
                         encryption: info.encryption.clone(),
                     };
@@ -309,7 +311,7 @@ impl Client {
 
         parts.sort_unstable_by_key(|part| part.part_number);
 
-        // done sharing the info now, can safely unwrap it
+        // SAFETY: done sharing the info now, can safely unwrap it
         let info = unsafe { Arc::try_unwrap(info).unwrap_unchecked() };
 
         info.large.finish(&parts).boxed().await

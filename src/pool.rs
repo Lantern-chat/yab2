@@ -97,6 +97,7 @@ impl Deref for PooledUploadUrl {
     fn deref(&self) -> &Self::Target {
         debug_assert!(self.url.is_some());
 
+        // SAFETY: These should never be `None` until after `Drop`
         unsafe { self.url.as_ref().unwrap_unchecked() }
     }
 }
@@ -106,6 +107,7 @@ impl DerefMut for PooledUploadUrl {
     fn deref_mut(&mut self) -> &mut Self::Target {
         debug_assert!(self.url.is_some());
 
+        // SAFETY: These should never be `None` until after `Drop`
         unsafe { self.url.as_mut().unwrap_unchecked() }
     }
 }
@@ -113,6 +115,7 @@ impl DerefMut for PooledUploadUrl {
 impl Drop for PooledUploadUrl {
     fn drop(&mut self) {
         if let Some(pool) = self.pool.upgrade() {
+            // SAFETY: This should never be `None` until after `Drop`
             pool.urls.lock().push_back(unsafe { self.url.take().unwrap_unchecked() });
             pool.sem.add_permits(1);
         }

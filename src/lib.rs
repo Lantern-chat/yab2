@@ -28,6 +28,8 @@
 //! for PHI/PII data, and it is not generally encrypted in client-side encryption architectures.**
 
 #![allow(clippy::redundant_pattern_matching)]
+#![deny(clippy::missing_safety_doc, clippy::undocumented_unsafe_blocks)]
+#![cfg_attr(debug_assertions, warn(missing_docs))]
 
 #[macro_use]
 extern crate serde;
@@ -140,7 +142,10 @@ pub struct ClientBuilder {
 
 /// Wrapper around a response and the file's parsed headers.
 pub struct DownloadedFile {
+    /// The streaming response
     pub resp: reqwest::Response,
+
+    /// Parsed header info from the response
     pub info: models::B2FileHeaders,
 }
 
@@ -1138,6 +1143,7 @@ pub struct LargeFileUpload {
 }
 
 impl LargeFileUpload {
+    /// Get the inner [`models::B2FileInfo`] of the large file.
     pub fn info(&self) -> &models::B2FileInfo {
         &self.info
     }

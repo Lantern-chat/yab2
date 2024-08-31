@@ -51,12 +51,28 @@ async fn hash_chunk(file: &mut File, start: u64, end: u64) -> Result<String, B2E
     Ok(hex::encode(sha1.finalize()))
 }
 
-fn generate_file_upload_callback(file: Arc<Mutex<File>>, start: u64, end: u64) -> impl Fn() -> Body {
-    move || {
+#[derive(Debug, Clone)]
+struct FileChunk {
+    file: Arc<Mutex<File>>,
+    start: u64,
+    end: u64,
+}
+
+impl FileChunk {
+    #[inline]
+    const fn new(file: Arc<Mutex<File>>, start: u64, end: u64) -> Self {
+        Self { file, start, end }
+    }
+}
+
+impl MakeBody<Body> for FileChunk {
+    fn make(&self) -> Body {
+        let (start, end) = (self.start, self.end);
+
         let num_chunks = (end - start).div_ceil(DEFAULT_BUF_SIZE as u64) as usize;
 
         // Pretty much guaranteed to be able to lock the file, so just do it.
-        let file = Mutex::try_lock_owned(file.clone()).expect("Unable to lock file");
+        let file = Mutex::try_lock_owned(self.file.clone()).expect("Unable to lock file");
 
         struct State {
             file: OwnedMutexGuard<File>,
@@ -201,7 +217,7 @@ impl Client {
                     legal_hold: info.legal_hold,
                 };
 
-                url.upload_file(&whole_info, generate_file_upload_callback(file, 0, length)).await
+                url.upload_file(&whole_info, FileChunk::new(file, 0, length)).await
             });
 
             return do_upload.await;
@@ -290,8 +306,8 @@ impl Client {
                         encryption: info.encryption.clone(),
                     };
 
-                    let cb = generate_file_upload_callback(file.clone(), start, end);
-                    let part = info.large.upload_part(&mut url, &part_info, cb).await?;
+                    let part = FileChunk::new(file.clone(), start, end);
+                    let part = info.large.upload_part(&mut url, &part_info, part).await?;
 
                     parts.push(Ok::<_, B2Error>(part));
                 }

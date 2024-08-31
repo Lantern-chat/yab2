@@ -1035,6 +1035,25 @@ pub struct UploadUrl(RawUploadUrl);
 #[repr(transparent)]
 pub struct UploadPartUrl(RawUploadUrl);
 
+/// Anything that can create a body for a request.
+///
+/// Automatically implemented for closures that return `B`, where `B` is convertible to a `reqwest::Body`.
+pub trait MakeBody<B: Into<reqwest::Body>> {
+    /// Creates a body for a request.
+    fn make(&self) -> B;
+}
+
+impl<F, B> MakeBody<B> for F
+where
+    F: Fn() -> B,
+    B: Into<reqwest::Body>,
+{
+    #[inline(always)]
+    fn make(&self) -> B {
+        (*self)()
+    }
+}
+
 impl RawUploadUrl {
     /// Actually performs the upload, with automatic reauthorization if necessary.
     async fn do_upload<F, T>(&mut self, f: F) -> Result<T, B2Error>
@@ -1071,13 +1090,13 @@ impl RawUploadUrl {
 
     async fn upload_file<F, B>(&mut self, info: &NewFileInfo<'_>, file: F) -> Result<models::B2FileInfo, B2Error>
     where
-        F: Fn() -> B,
+        F: MakeBody<B>,
         B: Into<reqwest::Body>,
     {
         self.check_prefix(info.file_name)?;
 
         self.do_upload(|builder| {
-            builder.body(file()).headers({
+            builder.body(file.make()).headers({
                 let mut headers = HeaderMap::new();
                 info.add_headers(&mut headers);
                 headers
@@ -1088,11 +1107,11 @@ impl RawUploadUrl {
 
     async fn upload_part<F, B>(&mut self, info: &NewPartInfo<'_>, body: F) -> Result<models::B2PartInfo, B2Error>
     where
-        F: Fn() -> B,
+        F: MakeBody<B>,
         B: Into<reqwest::Body>,
     {
         self.do_upload(|builder| {
-            builder.body(body()).headers({
+            builder.body(body.make()).headers({
                 let mut headers = HeaderMap::new();
                 info.add_headers(&mut headers);
                 headers
@@ -1114,7 +1133,7 @@ impl UploadUrl {
         file: F,
     ) -> Result<models::B2FileInfo, B2Error>
     where
-        F: Fn() -> B,
+        F: MakeBody<B>,
         B: Into<reqwest::Body>,
     {
         self.0.upload_file(info, file).await
@@ -1184,7 +1203,7 @@ impl LargeFileUpload {
         part: F,
     ) -> Result<models::B2PartInfo, B2Error>
     where
-        F: Fn() -> B,
+        F: MakeBody<B>,
         B: Into<reqwest::Body>,
     {
         if url.0.url.file_id.as_deref() != Some(self.info.file_id.as_ref()) {
